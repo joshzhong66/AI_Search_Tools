@@ -560,7 +560,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if args.host not in LOCAL_HOSTS:
         raise SystemExit("为保护 API Key，本地代理只允许绑定 127.0.0.1、localhost 或 ::1")
     server = ThreadingHTTPServer((args.host, args.port), ClientHandler)
-    url = f"http://{args.host}:{args.port}"
+    url = f"http://{args.host}:{server.server_address[1]}"
     print(f"AI Search Skill 前端已启动：{url}")
     if args.open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
