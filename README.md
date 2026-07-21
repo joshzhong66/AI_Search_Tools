@@ -20,10 +20,10 @@ AI_Search_Tools 是本地 AI Skill 客户端，提供无登录网页和统一 CL
 要求 Python 3.10 或更高版本，不需要安装第三方 Python 包。
 
 ```powershell
-python scripts/platform_skill.py serve --port 0 --open-browser
+python scripts/platform_skill.py serve --port 8790 --open-browser
 ```
 
-命令会输出实际访问地址；使用 `--port 0` 时会自动选择可用端口。在“API配置”页填写 Apify API Token，官方地址固定为 `https://api.apify.com/v2`。
+固定访问地址为 `http://127.0.0.1:8790`。不要使用 `--port 0` 或其他端口：浏览器的本地任务与结果缓存按端口隔离，切换端口会让历史结果不可见。在“API配置”页填写 Apify API Token，官方地址固定为 `https://api.apify.com/v2`。
 
 主要页面：
 

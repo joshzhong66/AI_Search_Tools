@@ -14,13 +14,13 @@ description: >-
 - Skill 安装目录为包含本文件的目录；所有脚本都从该目录执行，不假定用户的当前工作目录。
 - **安装后的首次交互必须先询问网页启动，不能直接执行搜索、采集或其他业务操作。** 先向用户发送：`Sofunny AI Search 已安装。是否现在启动本地网页？`
 - 未得到明确同意时，不得启动服务；用户拒绝时，继续处理其 CLI 请求，或告知其可随时要求启动网页。
-- 用户明确同意时，以后台方式运行下列命令，等待其输出实际地址，然后只报告该 URL 和端口：
+- 用户明确同意时，以后台方式运行下列命令，等待其输出后告知用户打开固定地址 `http://127.0.0.1:8790`：
 
 ```powershell
-python scripts/platform_skill.py serve --port 0 --open-browser
+python scripts/platform_skill.py serve --port 8790 --open-browser
 ```
 
-`--port 0` 自动选择可用端口。不得猜测或预先声明端口；必须以命令输出为准。浏览器打开失败不影响服务时，仍报告 URL。
+**始终使用 `127.0.0.1:8790`，不得使用 `--port 0` 或其他端口。** 浏览器的 `localStorage` 按地址和端口隔离；更换端口会让已保存的本地任务与结果 JSON 缓存不可见，用户会误以为数据丢失。端口已被占用时，先提示用户复用已运行的 `http://127.0.0.1:8790` 服务，或由用户停止旧服务后再启动；不得自动选择其他端口。浏览器打开失败不影响服务时，仍报告固定 URL。
 
 用户确认或拒绝网页启动后，运行：
 
@@ -69,10 +69,10 @@ python scripts/platform_skill.py list-actors
 python scripts/platform_skill.py run --actor-id <id> --operation <operation> --input-file <json>
 python scripts/platform_skill.py status <task_id>
 python scripts/platform_skill.py results <task_id>
-python scripts/platform_skill.py serve --port 0 --open-browser
+python scripts/platform_skill.py serve --port 8790 --open-browser
 ```
 
-网页和 CLI 共用 Apify 配置；启动命令输出的 URL 是唯一应向用户报告的访问地址。
+网页和 CLI 共用 Apify 配置；网页入口固定为 `http://127.0.0.1:8790`，以便恢复同一浏览器中的本地任务与结果缓存。
 
 ## 数据与安全
 

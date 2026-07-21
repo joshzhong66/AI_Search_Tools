@@ -124,6 +124,13 @@ async function checkViewport(browser, viewport) {
     assert.ok(douyinBox.width <= viewport.width && douyinBox.height <= viewport.height, "移动端抖音详情弹窗超出视口");
     await page.screenshot({ path: path.join("outputs", "ui-douyin-detail-mobile.png"), fullPage: true });
     await page.getByRole("button", { name: "关闭" }).click();
+    await page.goto(`${baseUrl}/kuaishou/results`);
+    await page.getByRole("button", { name: "快手露营记录", exact: true }).click();
+    const kuaishouModal = page.locator(".kuaishou-detail-modal");
+    await kuaishouModal.waitFor();
+    const kuaishouBox = await kuaishouModal.boundingBox();
+    assert.ok(kuaishouBox.width <= viewport.width && kuaishouBox.height <= viewport.height, "移动端快手详情弹窗超出视口");
+    await page.getByRole("button", { name: "关闭" }).click();
     await page.goto(`${baseUrl}/xiaohongshu/results`);
     await page.getByText("厦门旅行", { exact: true }).waitFor();
   }
@@ -220,6 +227,29 @@ async function checkInteractions(browser) {
   await page.locator("[data-open-comment-replies]").click();
   await page.getByRole("dialog").getByText("很实用的攻略", { exact: true }).waitFor();
   assert.equal(stats.submissions, beforeDirectEntry, "从评论任务打开回复弹窗不应自动提交任务");
+  await page.getByRole("button", { name: "关闭" }).click();
+
+  await setTasks(page, [task("kuaishou_search_videos", "kuaishou")]);
+  await page.goto(`${baseUrl}/kuaishou/results`);
+  await page.getByRole("button", { name: "快手露营记录", exact: true }).click();
+  const kuaishouDialog = page.getByRole("dialog");
+  await kuaishouDialog.getByRole("heading", { name: "快手露营记录", exact: true }).waitFor();
+  const kuaishouOriginLink = kuaishouDialog.getByRole("link", { name: "打开快手原页" });
+  assert.equal(await kuaishouOriginLink.getAttribute("target"), "_blank");
+  assert.equal(await kuaishouOriginLink.getAttribute("rel"), "noopener");
+  await kuaishouDialog.locator('input[name="max_items"]').fill("12");
+  const beforeKuaishouComment = stats.submissions;
+  await kuaishouDialog.getByRole("button", { name: "采集评论", exact: true }).click();
+  assert.equal(stats.submissions, beforeKuaishouComment + 1, "快手详情评论采集应只提交一次任务");
+  await kuaishouDialog.getByText("很喜欢这个视频", { exact: true }).waitFor();
+  assert.equal(await kuaishouDialog.getByText("评论 1", { exact: true }).count(), 1, "快手采集的评论应展示在详情弹层内");
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").some((item) => item.operation === "kuaishou_get_video_comments" && item.hideFromHistory)), true, "快手详情评论任务应保存隐藏索引以便刷新后恢复");
+  const kuaishouCommentRequest = stats.requests.at(-1);
+  assert.equal(kuaishouCommentRequest.operation, "kuaishou_get_video_comments");
+  assert.deepEqual(kuaishouCommentRequest.input, { max_items: 12, video_url: "https://www.kuaishou.com/short-video/ks-video-1" });
+  await page.reload();
+  await page.getByRole("button", { name: "快手露营记录", exact: true }).click();
+  await page.getByRole("dialog").getByText("很喜欢这个视频", { exact: true }).waitFor();
   await page.getByRole("button", { name: "关闭" }).click();
 
   await setTasks(page, [task("douyin_search_videos", "douyin")]);
