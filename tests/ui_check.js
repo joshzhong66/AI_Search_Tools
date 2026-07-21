@@ -23,7 +23,7 @@ const resultByOperation = {
     { id: "123", url: "https://www.douyin.com/video/123", text: "厦门咖啡探店", coverUrl: "https://p3-sign.douyinpic.com/cover-123.webp", authorMeta: { name: "抖音作者", avatarThumb: "https://p3-sign.douyinpic.com/avatar-123.webp" }, statistics: { playCount: 12000, diggCount: 800, commentCount: 23, collectCount: 90, shareCount: 18 }, createDate: "2026-07-20" },
     { id: "456", url: "https://www.douyin.com/video/456", text: "零评论视频", authorMeta: { name: "另一作者" }, statistics: { playCount: 20, diggCount: 2, commentCount: 0, collectCount: 0, shareCount: 0 } },
   ],
-  douyin_fetch_comments: [{ awemeId: "123", text: "拍得很好", likeCount: 12, replyCount: 1, region: "福建", createDate: "2026-07-20", user: { nickname: "抖音用户" } }],
+  douyin_fetch_comments: [{ awemeId: "123", text: "拍得很好", likeCount: 12, replyCount: 1, region: "福建", createDate: "2026-07-20", user: { nickname: "这是一个需要完整换行显示的抖音评论用户名称" } }],
   kuaishou_search_videos: [{ video_id: "ks-video-1", video_url: "https://www.kuaishou.com/short-video/ks-video-1", title: "快手露营记录", author_name: "快手作者", like_count: 66, comment_count: 8, publish_time: 1750000000 }],
   kuaishou_get_video_detail: [{ video_id: "ks-video-1", title: "快手视频详情", author_name: "快手作者", like_count: 66, comment_count: 8 }],
   kuaishou_get_video_comments: [{ video_id: "ks-video-1", comment_id: "ks-comment-1", content: "很喜欢这个视频", author_name: "评论用户", like_count: 3, reply_count: 1 }],
@@ -215,6 +215,7 @@ async function checkInteractions(browser) {
   assert.equal(await page.locator(".history-item").count(), 1, "小红书评论和回复任务不应出现在采集结果历史");
   assert.equal(await page.getByText("get_note_comments 测试结果", { exact: true }).count(), 0, "评论任务不应单独显示结果");
   await page.goto(`${baseUrl}/tasks`);
+  await page.locator(".task-row").waitFor();
   assert.equal(await page.locator(".task-row").count(), 1, "评论和回复任务不应出现在全部任务");
 
   await setTasks(page, [task("kuaishou_search_videos", "kuaishou")]);
@@ -276,6 +277,12 @@ async function checkInteractions(browser) {
   await douyinDialog.getByRole("button", { name: "采集评论", exact: true }).click();
   assert.equal(stats.submissions, beforeDetailComment + 1, "详情评论采集应只提交一次任务");
   await douyinDialog.getByText("拍得很好", { exact: true }).waitFor();
+  const douyinCommentName = douyinDialog.locator(".douyin-comment-item .identity-cell strong").first();
+  const douyinCommentText = douyinDialog.locator(".douyin-comment-item > p").first();
+  assert.equal(await douyinCommentName.evaluate((element) => getComputedStyle(element).whiteSpace), "normal", "抖音评论昵称应允许换行");
+  const [nameBox, textBox] = await Promise.all([douyinCommentName.boundingBox(), douyinCommentText.boundingBox()]);
+  assert.ok(nameBox && textBox && textBox.y >= nameBox.y + nameBox.height, "抖音评论正文应显示在昵称下方");
+  await page.screenshot({ path: path.join("outputs", "ui-douyin-comment-layout.png"), fullPage: true });
   assert.equal(await douyinDialog.getByText("评论 1", { exact: true }).count(), 1, "采集的评论应展示在详情弹层内");
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").some((item) => item.operation === "douyin_fetch_comments" && item.hideFromHistory)), true, "详情内评论任务应保存隐藏索引以便刷新后恢复");
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:result-cache:v1") || "[]").some(([taskId]) => taskId === "task-douyin_fetch_comments")), true, "评论结果 JSON 应写入本地缓存");
