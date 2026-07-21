@@ -10,7 +10,7 @@ from platform_skill import main
 
 if __name__ == "__main__":
     print(
-        "提示：socialdatax_skill.py 已停止直连 Apify，现由 platform_skill.py 通过上游平台执行。",
+        "提示：请改用 platform_skill.py；仅支持 Apify 官方 API。",
         file=sys.stderr,
     )
     main()

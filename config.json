@@ -1,6 +1,6 @@
 {
-  "platform_api_base": "http://172.16.30.55:8787",
-  "platform_api_key": "",
+  "apify_api_base": "https://api.apify.com/v2",
+  "apify_api_token": "",
   "poll_interval_seconds": 2,
   "request_timeout_seconds": 60
 }

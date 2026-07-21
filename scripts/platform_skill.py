@@ -19,8 +19,10 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT_DIR / "frontend"
 CONFIG_PATH = ROOT_DIR / "config.json"
 LOCAL_CONFIG_PATH = ROOT_DIR / "config.local.json"
-DEFAULT_PLATFORM_URL = "http://172.16.30.55:8787"
-TERMINAL_STATUSES = {"settled", "refunded"}
+RESULT_CACHE_DIR = ROOT_DIR / "outputs" / "task-results"
+DEFAULT_APIFY_API_BASE = "https://api.apify.com/v2"
+TERMINAL_STATUSES = {"settled", "failed", "refunded"}
+APIFY_TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"}
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 MEDIA_HOSTS = {
     "xhscdn.com",
@@ -31,9 +33,42 @@ MEDIA_HOSTS = {
     "byteimg.com",
     "bytecdn.cn",
     "ibytedtos.com",
+    "kuaishou.com",
+    "kwai.com",
+    "kwimgs.com",
+    "gifshow.com",
     "pstatp.com",
+    "sinaimg.cn",
+    "sinaimg.com",
+    "weibocdn.com",
+    "weibo.com",
 }
 MAX_MEDIA_BYTES = 15 * 1024 * 1024
+
+XIAOHONGSHU_OPERATIONS = (
+    "search_notes", "search_hot_list", "get_note_detail", "get_user_info",
+    "list_user_notes", "get_note_comments", "get_note_sub_comments",
+)
+DOUYIN_SEARCH_OPERATIONS = ("douyin_search_videos",)
+DOUYIN_COMMENT_OPERATIONS = ("douyin_fetch_comments",)
+KUAISHOU_OPERATIONS = (
+    "kuaishou_search_videos", "kuaishou_get_video_detail", "kuaishou_get_video_comments",
+    "kuaishou_get_comment_replies", "kuaishou_get_user_info", "kuaishou_list_user_videos",
+)
+WEIBO_OPERATIONS = (
+    "weibo_search_posts", "weibo_search_hot_list", "weibo_get_post_detail",
+    "weibo_get_user_info", "weibo_list_user_posts", "weibo_get_post_comments",
+    "weibo_get_post_comment_replies", "weibo_list_post_likers", "weibo_list_post_reposts",
+)
+APIFY_ACTORS = (
+    {"actor_id": "sUXx8U35FLlaweCWO", "platform": "xiaohongshu", "title": "SocialDataX 小红书数据 API", "operations": list(XIAOHONGSHU_OPERATIONS)},
+    {"actor_id": "3TJaaOJDU1AMiOoJM", "platform": "douyin", "title": "抖音视频搜索", "operations": list(DOUYIN_SEARCH_OPERATIONS)},
+    {"actor_id": "KmxOUB02ZqH7jxj07", "platform": "douyin", "title": "抖音评论采集", "operations": list(DOUYIN_COMMENT_OPERATIONS)},
+    {"actor_id": "W0cFcwuH7hhObmnwT", "platform": "kuaishou", "title": "SocialDataX 快手数据 API", "operations": list(KUAISHOU_OPERATIONS)},
+    {"actor_id": "2LERepIog9VIQCmN6", "platform": "weibo", "title": "SocialDataX 微博数据 API", "operations": list(WEIBO_OPERATIONS)},
+)
+APIFY_OPERATIONS = {operation: actor for actor in APIFY_ACTORS for operation in actor["operations"]}
+_APIFY_TASK_CONTEXT: dict[str, dict[str, str]] = {}
 
 
 class PlatformError(RuntimeError):
@@ -83,22 +118,24 @@ def load_config() -> dict[str, Any]:
     base = load_json(CONFIG_PATH)
     local = load_json(LOCAL_CONFIG_PATH)
     merged = {**base, **local}
-    api_base = os.getenv("AI_SEARCH_PLATFORM_URL") or merged.get("platform_api_base") or DEFAULT_PLATFORM_URL
-    api_key = os.getenv("AI_SEARCH_PLATFORM_API_KEY") or merged.get("platform_api_key") or ""
+    apify_api_base = os.getenv("APIFY_API_BASE") or merged.get("apify_api_base") or DEFAULT_APIFY_API_BASE
+    apify_api_token = os.getenv("APIFY_API_TOKEN") or merged.get("apify_api_token") or ""
     return {
-        "platform_api_base": validate_platform_url(str(api_base)),
-        "platform_api_key": str(api_key).strip(),
+        "apify_api_base": validate_platform_url(str(apify_api_base)),
+        "apify_api_token": str(apify_api_token).strip(),
         "poll_interval_seconds": _positive_int(merged.get("poll_interval_seconds"), 2, 1),
         "request_timeout_seconds": _positive_int(merged.get("request_timeout_seconds"), 60, 5),
     }
 
 
-def save_local_config(platform_api_base: str, platform_api_key: str) -> dict[str, Any]:
+def save_local_config(apify_api_token: str) -> dict[str, Any]:
     current = load_json(LOCAL_CONFIG_PATH)
+    for key in ("gateway_fallback_enabled", "platform_api_base", "platform_api_key"):
+        current.pop(key, None)
     current.update(
         {
-            "platform_api_base": validate_platform_url(platform_api_base),
-            "platform_api_key": platform_api_key.strip(),
+            "apify_api_base": DEFAULT_APIFY_API_BASE,
+            "apify_api_token": apify_api_token.strip(),
         }
     )
     LOCAL_CONFIG_PATH.write_text(
@@ -129,41 +166,32 @@ def _decode_response(raw: bytes, status: int) -> Any:
         ) from exc
 
 
-def call_platform(
+def _call_json(
     method: str,
-    path: str,
+    url: str,
     *,
+    headers: dict[str, str],
     body: dict[str, Any] | None = None,
-    idempotency_key: str | None = None,
+    timeout: int,
+    retry_get: bool = True,
 ) -> Any:
-    config = load_config()
-    api_key = config["platform_api_key"]
-    if not api_key:
-        raise PlatformError(HTTPStatus.UNAUTHORIZED, "尚未配置上游平台 API Key")
-    if not path.startswith("/"):
-        raise ValueError("上游 API 路径必须以 / 开头")
-
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     data = None
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    if idempotency_key:
-        headers["Idempotency-Key"] = idempotency_key
-
-    attempts = 2 if method == "GET" or idempotency_key else 1
+    attempts = 2 if method == "GET" and retry_get else 1
     for attempt in range(attempts):
-        req = request.Request(
-            f"{config['platform_api_base']}{path}", data=data, headers=headers, method=method
-        )
+        req = request.Request(url, data=data, headers=headers, method=method)
         try:
-            with request.urlopen(req, timeout=config["request_timeout_seconds"]) as response:
+            with request.urlopen(req, timeout=timeout) as response:
                 return _decode_response(response.read(), response.status)
         except error.HTTPError as exc:
             raw = exc.read()
             try:
                 payload = _decode_response(raw, exc.code)
                 detail = payload.get("detail") if isinstance(payload, dict) else None
+                if not detail and isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+                    detail = payload["error"].get("message")
                 detail = str(detail or f"上游请求失败：HTTP {exc.code}")
             except PlatformError:
                 preview = raw.decode("utf-8", errors="replace").strip()[:160]
@@ -173,15 +201,117 @@ def call_platform(
             if attempt + 1 < attempts:
                 continue
             reason = getattr(exc, "reason", exc)
-            raise PlatformError(HTTPStatus.BAD_GATEWAY, f"无法连接上游平台：{reason}") from exc
-    raise PlatformError(HTTPStatus.BAD_GATEWAY, "无法连接上游平台")
+            raise PlatformError(HTTPStatus.BAD_GATEWAY, f"无法连接上游：{reason}") from exc
+    raise PlatformError(HTTPStatus.BAD_GATEWAY, "无法连接上游")
+
+
+def call_apify(method: str, path: str, *, body: dict[str, Any] | None = None) -> Any:
+    config = load_config()
+    token = config["apify_api_token"]
+    if not token:
+        raise PlatformError(HTTPStatus.UNAUTHORIZED, "尚未配置 Apify 官方 API Token")
+    if not path.startswith("/"):
+        raise ValueError("Apify API 路径必须以 / 开头")
+    return _call_json(
+        method,
+        f"{config['apify_api_base']}{path}",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        body=body,
+        timeout=config["request_timeout_seconds"],
+        retry_get=True,
+    )
+
+
+def list_apify_actors() -> dict[str, Any]:
+    payload = call_apify("GET", "/users/me")
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        raise PlatformError(HTTPStatus.BAD_GATEWAY, "Apify 官方返回了无效的账户信息")
+    return {"data": [dict(actor) for actor in APIFY_ACTORS], "provider": "apify"}
 
 
 def list_actors() -> dict[str, Any]:
-    payload = call_platform("GET", "/v1/actors")
-    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
-        raise PlatformError(HTTPStatus.BAD_GATEWAY, "上游平台返回了无效的 Actor 列表")
-    return payload
+    return list_apify_actors()
+
+
+def _apify_input(operation: str, task_input: dict[str, Any]) -> dict[str, Any]:
+    if operation not in APIFY_OPERATIONS:
+        raise ValueError(f"Apify 官方模式不支持 operation：{operation}")
+    payload = {key: value for key, value in task_input.items() if value not in (None, "")}
+    if operation in XIAOHONGSHU_OPERATIONS:
+        return {"operation": operation, **payload}
+    if operation == "douyin_search_videos":
+        return {
+            "keywords": payload.get("keywords") or [],
+            "maxResultsPerQuery": payload.get("maxResultsPerQuery", 5),
+            "sort": payload.get("sort", "general"),
+            "publishTime": payload.get("publishTime", "unlimited"),
+            "duration": payload.get("duration", "unlimited"),
+            "shouldDownloadVideos": False,
+            "shouldDownloadCovers": True,
+            "shouldDownloadSlideshowImages": False,
+        }
+    if operation == "douyin_fetch_comments":
+        output = {
+            "awemeUrls": payload.get("awemeUrls") or [],
+            "maxCommentsPerAweme": payload.get("maxCommentsPerAweme", 5),
+            "includeReplies": bool(payload.get("includeReplies", False)),
+        }
+        if output["includeReplies"]:
+            output["maxRepliesPerComment"] = payload.get("maxRepliesPerComment", 20)
+        return output
+    prefix = "weibo_" if operation in WEIBO_OPERATIONS else "kuaishou_"
+    return {"operation": operation.removeprefix(prefix), **payload}
+
+
+def _apify_status(value: Any) -> str:
+    status = str(value or "").upper()
+    if status in {"READY", "RUNNING"}:
+        return "running"
+    if status == "SUCCEEDED":
+        return "settled"
+    if status in {"FAILED", "ABORTED", "TIMED-OUT"}:
+        return "failed"
+    return "running"
+
+
+def _apify_task(payload: Any, context: dict[str, str] | None = None) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not data.get("id"):
+        raise PlatformError(HTTPStatus.BAD_GATEWAY, "Apify 官方未返回有效 Run ID")
+    run_id = str(data["id"])
+    saved = {**_APIFY_TASK_CONTEXT.get(run_id, {}), **(context or {})}
+    if saved:
+        _APIFY_TASK_CONTEXT[run_id] = saved
+    usage = data.get("usageTotalUsd")
+    if usage is None and isinstance(data.get("stats"), dict):
+        usage = data["stats"].get("computeUnits")
+    output = {
+        "id": run_id,
+        "provider": "apify",
+        "status": _apify_status(data.get("status")),
+        "actor_id": str(data.get("actId") or saved.get("actor_id") or ""),
+        "operation": saved.get("operation") or "",
+        "dataset_id": str(data.get("defaultDatasetId") or ""),
+        "cost_usd": usage,
+        "started_at": data.get("startedAt"),
+        "finished_at": data.get("finishedAt"),
+    }
+    status_message = data.get("statusMessage")
+    if output["status"] == "failed" and status_message:
+        output["error_message"] = str(status_message)
+    return output
+
+
+def submit_apify_task(actor_id: str, operation: str, task_input: dict[str, Any]) -> dict[str, Any]:
+    actor = APIFY_OPERATIONS.get(operation)
+    if not actor or actor_id != actor["actor_id"]:
+        raise ValueError("operation 与 Apify Actor 不匹配")
+    payload = call_apify(
+        "POST",
+        f"/acts/{parse.quote(actor_id, safe='')}/runs",
+        body=_apify_input(operation, task_input),
+    )
+    return _apify_task(payload, {"actor_id": actor_id, "operation": operation})
 
 
 def submit_task(
@@ -194,15 +324,7 @@ def submit_task(
         raise ValueError("actor_id 和 operation 不能为空")
     if not idempotency_key.strip() or len(idempotency_key) > 128:
         raise ValueError("idempotency_key 不能为空且不能超过 128 个字符")
-    payload = call_platform(
-        "POST",
-        "/v1/tasks",
-        body={"actor_id": actor_id.strip(), "operation": operation.strip(), "input": task_input},
-        idempotency_key=idempotency_key.strip(),
-    )
-    if not isinstance(payload, dict) or not payload.get("id"):
-        raise PlatformError(HTTPStatus.BAD_GATEWAY, "上游平台未返回有效任务 ID")
-    return payload
+    return submit_apify_task(actor_id.strip(), operation.strip(), task_input)
 
 
 def _task_id(value: str) -> str:
@@ -212,18 +334,47 @@ def _task_id(value: str) -> str:
     return parse.quote(value, safe="")
 
 
-def get_task(task_id: str) -> dict[str, Any]:
-    payload = call_platform("GET", f"/v1/tasks/{_task_id(task_id)}")
-    if not isinstance(payload, dict):
-        raise PlatformError(HTTPStatus.BAD_GATEWAY, "上游平台返回了无效任务数据")
-    return payload
+def save_result_cache(task_id: str, payload: dict[str, Any]) -> None:
+    filename = f"{_task_id(task_id)}.json"
+    target = RESULT_CACHE_DIR / filename
+    temporary = target.with_suffix(".tmp")
+    try:
+        RESULT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(
+                {"task_id": task_id, "saved_at": int(time.time()), "result": payload},
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+    except OSError as exc:
+        raise PlatformError(HTTPStatus.INTERNAL_SERVER_ERROR, f"无法保存本地结果 JSON：{exc}") from exc
 
 
-def get_results(task_id: str) -> dict[str, Any]:
-    payload = call_platform("GET", f"/v1/tasks/{_task_id(task_id)}/results")
-    if not isinstance(payload, dict):
-        raise PlatformError(HTTPStatus.BAD_GATEWAY, "上游平台返回了无效结果数据")
-    return payload
+def infer_provider(task_id: str, provider: str | None = None) -> str:
+    return "apify"
+
+
+def get_task(task_id: str, provider: str | None = None) -> dict[str, Any]:
+    return _apify_task(call_apify("GET", f"/actor-runs/{_task_id(task_id)}"))
+
+
+def get_results(task_id: str, provider: str | None = None) -> dict[str, Any]:
+    task = get_task(task_id, "apify")
+    if task["status"] != "settled":
+        raise PlatformError(HTTPStatus.CONFLICT, "Apify Run 尚未成功完成，暂时不能读取结果")
+    dataset_id = task.get("dataset_id")
+    if not dataset_id:
+        raise PlatformError(HTTPStatus.BAD_GATEWAY, "Apify Run 未返回默认 Dataset ID")
+    items = call_apify("GET", f"/datasets/{_task_id(str(dataset_id))}/items?clean=true&format=json")
+    if not isinstance(items, list):
+        raise PlatformError(HTTPStatus.BAD_GATEWAY, "Apify Dataset 返回了无效结果")
+    task["item_count"] = len(items)
+    output = {"task": task, "items": items, "provider": "apify"}
+    save_result_cache(task_id, output)
+    return output
 
 
 def validate_media_url(value: str) -> str:
@@ -270,13 +421,26 @@ def proxy_media(handler: SimpleHTTPRequestHandler, value: str) -> None:
     handler.wfile.write(data)
 
 
-def wait_for_task(task_id: str) -> dict[str, Any]:
+def wait_for_task(task_id: str, provider: str | None = None) -> dict[str, Any]:
     interval = load_config()["poll_interval_seconds"]
     while True:
-        task = get_task(task_id)
+        task = get_task(task_id, provider)
         if task.get("status") in TERMINAL_STATUSES:
             return task
         time.sleep(interval)
+
+
+def public_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load_config()
+    apify_ready = bool(config["apify_api_token"])
+    return {
+        "apify_api_base": config["apify_api_base"],
+        "apify_token_configured": apify_ready,
+        "apify_token_masked": mask_key(config["apify_api_token"]),
+        "api_key_configured": apify_ready,
+        "api_key_masked": mask_key(config["apify_api_token"]),
+        "poll_interval_seconds": config["poll_interval_seconds"],
+    }
 
 
 def json_response(handler: SimpleHTTPRequestHandler, status: int, payload: Any) -> None:
@@ -327,7 +491,8 @@ class ClientHandler(SimpleHTTPRequestHandler):
         if parsed.path in {
             "/", "/config", "/tasks", "/xiaohongshu", "/douyin",
             "/xiaohongshu/search", "/xiaohongshu/results",
-            "/douyin/search", "/douyin/results",
+            "/douyin/search", "/douyin/results", "/kuaishou/search", "/kuaishou/results",
+            "/weibo", "/weibo/search", "/weibo/results",
         }:
             self.path = "/index.html"
         super().do_GET()
@@ -342,17 +507,7 @@ class ClientHandler(SimpleHTTPRequestHandler):
     def handle_api_get(self, path: str) -> None:
         try:
             if path == "/api/client/config":
-                config = load_config()
-                json_response(
-                    self,
-                    HTTPStatus.OK,
-                    {
-                        "platform_api_base": config["platform_api_base"],
-                        "api_key_configured": bool(config["platform_api_key"]),
-                        "api_key_masked": mask_key(config["platform_api_key"]),
-                        "poll_interval_seconds": config["poll_interval_seconds"],
-                    },
-                )
+                json_response(self, HTTPStatus.OK, public_config())
                 return
             if path == "/api/client/actors":
                 json_response(self, HTTPStatus.OK, list_actors())
@@ -376,22 +531,12 @@ class ClientHandler(SimpleHTTPRequestHandler):
         try:
             body = parse_body(self)
             if path == "/api/client/config":
-                key = str(body.get("platform_api_key") or "")
-                if not key and body.get("keep_existing_key"):
-                    key = str(load_json(LOCAL_CONFIG_PATH).get("platform_api_key") or "")
-                config = save_local_config(
-                    str(body.get("platform_api_base") or DEFAULT_PLATFORM_URL), key
-                )
-                json_response(
-                    self,
-                    HTTPStatus.OK,
-                    {
-                        "platform_api_base": config["platform_api_base"],
-                        "api_key_configured": bool(config["platform_api_key"]),
-                        "api_key_masked": mask_key(config["platform_api_key"]),
-                        "poll_interval_seconds": config["poll_interval_seconds"],
-                    },
-                )
+                current = load_json(LOCAL_CONFIG_PATH)
+                apify_token = str(body.get("apify_api_token") or "")
+                if not apify_token and body.get("keep_existing_apify_token"):
+                    apify_token = str(current.get("apify_api_token") or "")
+                config = save_local_config(apify_token)
+                json_response(self, HTTPStatus.OK, public_config(config))
                 return
             if path == "/api/client/tasks":
                 task = submit_task(
@@ -428,10 +573,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="AI 搜索中转平台客户端 Skill")
+    parser = argparse.ArgumentParser(description="Apify 官方优先、AI-Search-Platform 网关备份的 AI 搜索 Skill")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("show-config", help="显示上游连接状态（API Key 仅显示掩码）")
-    sub.add_parser("list-actors", help="列出当前 API Key 可用的 Actor")
+    sub.add_parser("show-config", help="显示官方与网关备份状态（凭据仅显示掩码）")
+    sub.add_parser("list-actors", help="列出当前凭据可用的 Actor")
     run = sub.add_parser("run", help="提交上游任务")
     run.add_argument("--actor-id", required=True)
     run.add_argument("--operation", required=True)
@@ -454,7 +599,7 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.command == "show-config":
         config = load_config()
-        print(json.dumps({"platform_api_base": config["platform_api_base"], "api_key": mask_key(config["platform_api_key"])}, ensure_ascii=False, indent=2))
+        print(json.dumps({"provider": "apify", "api_base": config["apify_api_base"], "token": mask_key(config["apify_api_token"])}, ensure_ascii=False, indent=2))
     elif args.command == "list-actors":
         print(json.dumps(list_actors(), ensure_ascii=False, indent=2))
     elif args.command == "run":

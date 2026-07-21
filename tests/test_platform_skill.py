@@ -82,13 +82,13 @@ class PlatformSkillTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.config_path = Path(self.temp.name) / "config.json"
         self.local_path = Path(self.temp.name) / "config.local.json"
-        self.config_path.write_text(json.dumps({"platform_api_base": "http://base.test", "platform_api_key": "base-key"}), encoding="utf-8")
-        self.path_patch = mock.patch.multiple(skill, CONFIG_PATH=self.config_path, LOCAL_CONFIG_PATH=self.local_path)
+        self.config_path.write_text(json.dumps({"apify_api_token": "base-apify"}), encoding="utf-8")
+        self.path_patch = mock.patch.multiple(skill, CONFIG_PATH=self.config_path, LOCAL_CONFIG_PATH=self.local_path, RESULT_CACHE_DIR=Path(self.temp.name) / "task-results")
         self.path_patch.start()
         self.env_patch = mock.patch.dict(os.environ, {}, clear=False)
         self.env_patch.start()
-        os.environ.pop("AI_SEARCH_PLATFORM_URL", None)
-        os.environ.pop("AI_SEARCH_PLATFORM_API_KEY", None)
+        os.environ.pop("APIFY_API_TOKEN", None)
+        os.environ.pop("APIFY_API_BASE", None)
 
     def tearDown(self) -> None:
         self.env_patch.stop()
@@ -96,18 +96,16 @@ class PlatformSkillTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_config_priority_environment_local_base(self) -> None:
-        self.local_path.write_text(json.dumps({"platform_api_base": "http://local.test", "platform_api_key": "local-key"}), encoding="utf-8")
-        self.assertEqual(skill.load_config()["platform_api_base"], "http://local.test")
-        os.environ["AI_SEARCH_PLATFORM_URL"] = "https://env.test/"
-        os.environ["AI_SEARCH_PLATFORM_API_KEY"] = "env-key"
+        self.local_path.write_text(json.dumps({"apify_api_token": "local-apify"}), encoding="utf-8")
+        self.assertEqual(skill.load_config()["apify_api_token"], "local-apify")
+        os.environ["APIFY_API_TOKEN"] = "env-apify"
         config = skill.load_config()
-        self.assertEqual(config["platform_api_base"], "https://env.test")
-        self.assertEqual(config["platform_api_key"], "env-key")
+        self.assertEqual(config["apify_api_token"], "env-apify")
 
     def test_mask_key_never_returns_full_key(self) -> None:
         self.assertEqual(skill.mask_key(""), "")
         self.assertEqual(skill.mask_key("short"), "*****")
-        self.assertEqual(skill.mask_key("sf_live_abcdefghijkl"), "sf_live_...ijkl")
+        self.assertEqual(skill.mask_key("gateway_abcdefghijkl"), "gateway_...ijkl")
 
     def test_url_validation(self) -> None:
         self.assertEqual(skill.validate_platform_url("https://example.com/"), "https://example.com")
@@ -116,7 +114,7 @@ class PlatformSkillTests(unittest.TestCase):
                 skill.validate_platform_url(value)
 
     def test_missing_key_is_401(self) -> None:
-        self.config_path.write_text(json.dumps({"platform_api_base": "http://base.test", "platform_api_key": ""}), encoding="utf-8")
+        skill.CONFIG_PATH.write_text(json.dumps({"apify_api_token": ""}), encoding="utf-8")
         with self.assertRaises(skill.PlatformError) as context:
             skill.list_actors()
         self.assertEqual(context.exception.status, 401)
@@ -125,11 +123,51 @@ class PlatformSkillTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             skill.get_task("../../secret")
 
+    def test_official_actor_catalog_and_token_validation(self) -> None:
+        with mock.patch.object(skill, "call_apify", return_value={"data": {"id": "user"}}) as call:
+            payload = skill.list_apify_actors()
+        self.assertEqual(call.call_args.args, ("GET", "/users/me"))
+        self.assertEqual(payload["provider"], "apify")
+        platforms = {item["platform"] for item in payload["data"]}
+        self.assertEqual(platforms, {"xiaohongshu", "douyin", "kuaishou", "weibo"})
+
+    def test_official_input_mapping_is_shared_by_business_operations(self) -> None:
+        self.assertEqual(skill._apify_input("weibo_search_posts", {"keyword": "AI"})["operation"], "search_posts")
+        self.assertEqual(skill._apify_input("kuaishou_get_video_comments", {"video_id": "1"})["operation"], "get_video_comments")
+        self.assertEqual(skill._apify_input("get_note_comments", {"note_id": "n"})["operation"], "get_note_comments")
+        douyin = skill._apify_input("douyin_search_videos", {"keywords": ["AI"]})
+        self.assertFalse(douyin["shouldDownloadVideos"])
+        self.assertTrue(douyin["shouldDownloadCovers"])
+        self.assertEqual(douyin["keywords"], ["AI"])
+
+    def test_apify_status_and_dataset_are_normalized(self) -> None:
+        responses = [
+            {"data": {"id": "RunOfficial123", "actId": "sUXx8U35FLlaweCWO", "status": "SUCCEEDED", "defaultDatasetId": "dataset123", "usageTotalUsd": 0.0123}},
+            [{"title": "结果"}],
+        ]
+        with mock.patch.object(skill, "call_apify", side_effect=responses):
+            payload = skill.get_results("RunOfficial123", "apify")
+        self.assertEqual(payload["task"]["status"], "settled")
+        self.assertEqual(payload["task"]["cost_usd"], 0.0123)
+        self.assertEqual(payload["items"][0]["title"], "结果")
+        cached = skill.RESULT_CACHE_DIR / "RunOfficial123.json"
+        self.assertTrue(cached.exists())
+        self.assertEqual(json.loads(cached.read_text(encoding="utf-8"))["result"]["items"][0]["title"], "结果")
+
+    def test_submit_task_uses_official_actor_only(self) -> None:
+        expected = {"id": "official-task", "provider": "apify"}
+        with mock.patch.object(skill, "submit_apify_task", return_value=expected) as submit:
+            result = skill.submit_task("sUXx8U35FLlaweCWO", "search_notes", {"keyword": "AI"}, "key")
+        self.assertEqual(result, expected)
+        submit.assert_called_once()
+
     def test_media_proxy_only_allows_known_cdn_hosts(self) -> None:
         self.assertEqual(
             skill.validate_media_url("https://sns-webpic-qc.xhscdn.com/example.webp"),
             "https://sns-webpic-qc.xhscdn.com/example.webp",
         )
+        self.assertEqual(skill.validate_media_url("https://wx1.sinaimg.cn/example.jpg"), "https://wx1.sinaimg.cn/example.jpg")
+        self.assertEqual(skill.validate_media_url("https://p3-sign.douyinpic.com/example.webp"), "https://p3-sign.douyinpic.com/example.webp")
         for value in ("http://127.0.0.1/private", "file:///tmp/a", "https://example.com/a.jpg"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 skill.validate_media_url(value)
@@ -197,7 +235,7 @@ class PlatformIntegrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         config_path = Path(self.temp.name) / "config.json"
         local_path = Path(self.temp.name) / "config.local.json"
-        config_path.write_text(json.dumps({"platform_api_base": self.base_url, "platform_api_key": "sf_test_key", "request_timeout_seconds": 5}), encoding="utf-8")
+        config_path.write_text(json.dumps({"apify_api_token": "official-test", "request_timeout_seconds": 5}), encoding="utf-8")
         self.patch = mock.patch.multiple(skill, CONFIG_PATH=config_path, LOCAL_CONFIG_PATH=local_path)
         self.patch.start()
 
@@ -205,32 +243,23 @@ class PlatformIntegrationTests(unittest.TestCase):
         self.patch.stop()
         self.temp.cleanup()
 
-    def test_actor_task_status_and_results_flow(self) -> None:
-        self.assertEqual(skill.list_actors()["data"][0]["actor_id"], "xhs")
-        task = skill.submit_task("xhs", "search_notes", {"keyword": "厦门"}, "same-key-flow")
-        self.assertEqual(skill.get_task(task["id"])["status"], "settled")
-        self.assertEqual(skill.get_results(task["id"])["items"][0]["title"], "结果")
+    def test_actor_catalog_uses_official_provider(self) -> None:
+        with mock.patch.object(skill, "call_apify", return_value={"data": {"id": "user"}}):
+            self.assertEqual(skill.list_actors()["provider"], "apify")
 
-    def test_same_idempotency_key_does_not_duplicate_task(self) -> None:
-        before = len(MockPlatformHandler.requests)
-        first = skill.submit_task("xhs", "search_notes", {"keyword": "A"}, "same-key-idempotency")
-        second = skill.submit_task("xhs", "search_notes", {"keyword": "A"}, "same-key-idempotency")
-        self.assertEqual(first["id"], second["id"])
-        self.assertEqual(len(MockPlatformHandler.requests), before + 1)
+    def test_hyphenated_task_ids_remain_official(self) -> None:
+        self.assertEqual(skill.infer_provider("run-with-hyphens"), "apify")
 
     def test_non_json_upstream_response_is_502(self) -> None:
         with self.assertRaises(skill.PlatformError) as context:
-            skill.call_platform("GET", "/non-json")
+            skill._decode_response(b"Internal Server Error", 200)
         self.assertEqual(context.exception.status, 502)
 
-    def test_http_error_detail_is_preserved(self) -> None:
-        config = skill.load_config()
-        config_path = skill.CONFIG_PATH
-        config_path.write_text(json.dumps({**config, "platform_api_key": "wrong"}), encoding="utf-8")
+    def test_missing_official_token_is_401(self) -> None:
+        skill.CONFIG_PATH.write_text(json.dumps({"apify_api_token": ""}), encoding="utf-8")
         with self.assertRaises(skill.PlatformError) as context:
             skill.list_actors()
         self.assertEqual(context.exception.status, 401)
-        self.assertIn("invalid", context.exception.detail)
 
 
 class ClientProxyTests(unittest.TestCase):
@@ -244,6 +273,10 @@ class ClientProxyTests(unittest.TestCase):
                 "/xiaohongshu/results",
                 "/douyin/search",
                 "/douyin/results",
+                "/kuaishou/search",
+                "/kuaishou/results",
+                "/weibo/search",
+                "/weibo/results",
                 "/tasks",
                 "/config",
             ):
@@ -259,7 +292,7 @@ class ClientProxyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             local_path = Path(directory) / "config.local.json"
-            config_path.write_text(json.dumps({"platform_api_base": "http://example.test", "platform_api_key": "sf_live_secret_value"}), encoding="utf-8")
+            config_path.write_text(json.dumps({"apify_api_token": "official-secret-value"}), encoding="utf-8")
             with mock.patch.multiple(skill, CONFIG_PATH=config_path, LOCAL_CONFIG_PATH=local_path):
                 server = ThreadingHTTPServer(("127.0.0.1", 0), skill.ClientHandler)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -267,9 +300,9 @@ class ClientProxyTests(unittest.TestCase):
                 try:
                     with request.urlopen(f"http://127.0.0.1:{server.server_port}/api/client/config") as response:
                         payload = json.load(response)
-                    self.assertTrue(payload["api_key_configured"])
-                    self.assertNotIn("platform_api_key", payload)
-                    self.assertNotEqual(payload["api_key_masked"], "sf_live_secret_value")
+                    self.assertTrue(payload["apify_token_configured"])
+                    self.assertNotIn("apify_api_token", payload)
+                    self.assertNotEqual(payload["apify_token_masked"], "official-secret-value")
                 finally:
                     server.shutdown()
                     server.server_close()
