@@ -52,13 +52,13 @@ http://127.0.0.1:8790/
 
 【排序方式】：热门/综合/最新
 
-![image-20260721204209831](https://gitee.com/zyx3721/Picbed/raw/master/images/2026/07/21/6e12c8bff31fd8c77691bbd9a3022e3b-image-20260721204209831-5fe3ca.png)
+![搜索与采集界面](image/web-search.png)
 
 ### 采集结果
 
 点击标题打开详情页，可以采集该条视频的评论和回复。
 
-![image-20260721203904088](https://gitee.com/zyx3721/Picbed/raw/master/images/2026/07/21/9f1a72e7ef3f7378604ed5e2ed818e6d-image-20260721203904088-d541d7.png)
+![详情与评论采集](image/detail-comments.png)
 
 
 
