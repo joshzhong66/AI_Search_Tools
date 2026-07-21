@@ -61,6 +61,10 @@ python scripts/platform_skill.py run `
 
 抖音仅在用户明确需要回复时设置 `includeReplies=true`，并从较小的 `maxRepliesPerComment` 开始。微博首次搜索的 `page_token` 必须为空，不能填写页码。
 
+快手先使用 `kuaishou_get_video_comments` 采集一级评论，再仅对 `has_replies=true` 的结果使用真实 `photo_id + comment_id` 调用 `kuaishou_get_comment_replies`。不要把评论与回复合并成一个任务；客户端会将字段和 operation 转换为快手 Actor 的原生契约。
+
+网页端把所有平台的评论和回复视为详情内部任务：从笔记、视频或微博详情发起并在原详情内展示，不把评论任务当作独立采集结果或全局任务展示。CLI 仍可直接调用对应 operation。
+
 ## 常用命令
 
 ```powershell

@@ -144,7 +144,9 @@ async function checkInteractions(browser) {
   const stats = await mockClientApi(page);
   await page.goto(`${baseUrl}/xiaohongshu/search`);
   await page.getByRole("heading", { name: "小红书搜索与采集" }).waitFor();
-  for (const label of ["笔记搜索", "热榜搜索", "笔记详情", "博主信息", "博主笔记", "笔记评论", "评论回复"]) assert.equal(await page.getByRole("button", { name: label }).count(), 1, `缺少小红书能力：${label}`);
+  for (const label of ["笔记搜索", "热榜搜索", "笔记详情", "博主信息", "博主笔记"]) assert.equal(await page.getByRole("button", { name: label }).count(), 1, `缺少小红书能力：${label}`);
+  assert.equal(await page.getByRole("button", { name: "笔记评论", exact: true }).count(), 0, "小红书评论不应作为独立搜索能力展示");
+  assert.equal(await page.getByRole("button", { name: "评论回复", exact: true }).count(), 0, "小红书回复不应作为独立搜索能力展示");
 
   await page.goto(`${baseUrl}/config`);
   assert.equal(await page.locator('input[type="url"][readonly]').inputValue(), "https://api.apify.com/v2", "Apify 官方地址应固定");
@@ -188,21 +190,8 @@ async function checkInteractions(browser) {
   assert.match(page.url(), /\/xiaohongshu\/results$/, "采集回复不应离开采集结果页");
   assert.equal(await page.getByRole("dialog").count(), 1, "采集回复后评论弹窗应保持打开");
   assert.equal(await page.locator(".modal-reply-list").count(), 1, "回复应嵌套在对应一级评论下");
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").filter((item) => ["get_note_comments", "get_note_sub_comments"].includes(item.operation)).every((item) => item.hideFromHistory)), true, "小红书评论和回复任务必须隐藏");
   await page.screenshot({ path: path.join("outputs", "ui-comment-replies.png"), fullPage: true });
-  await page.getByRole("button", { name: "关闭" }).click();
-
-  await setTasks(page, [task("get_note_comments", "xiaohongshu")]);
-  await page.goto(`${baseUrl}/xiaohongshu/results`);
-  await page.getByText("很实用的攻略", { exact: true }).waitFor();
-  await page.locator("[data-open-comment-replies]").click();
-  const beforeBatchReplies = stats.submissions;
-  await page.locator(".collection-action").filter({ hasText: "回复" }).getByRole("button", { name: "采集", exact: true }).click();
-  await page.getByRole("dialog", { name: "批量采集评论回复" }).waitFor();
-  assert.equal(stats.submissions, beforeBatchReplies, "批量回复确认前不得创建任务");
-  await page.getByRole("dialog", { name: "批量采集评论回复" }).getByRole("button", { name: "确认采集" }).click();
-  await page.waitForFunction(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").some((item) => item.operation === "get_note_sub_comments"));
-  assert.equal(stats.submissions, beforeBatchReplies + 1, "批量回复应为候选评论创建任务");
-  assert.equal(await page.locator(".collection-action").filter({ hasText: "回复" }).getByRole("button", { name: "采集", exact: true }).isDisabled(), true, "已采集回复不得重复进入批量任务");
   await page.getByRole("button", { name: "关闭" }).click();
 
   await setTasks(page, [task("search_notes", "xiaohongshu")]);
@@ -220,14 +209,13 @@ async function checkInteractions(browser) {
   assert.equal(stats.submissions, beforeDetailRefresh + 1, "确认后应提交一条详情补采任务");
   await page.getByRole("button", { name: "关闭" }).click();
 
-  await setTasks(page, [task("get_note_comments", "xiaohongshu")]);
+  await setTasks(page, [task("get_note_comments", "xiaohongshu"), task("get_note_sub_comments", "xiaohongshu"), task("search_notes", "xiaohongshu")]);
   await page.goto(`${baseUrl}/xiaohongshu/results`);
-  await page.getByText("很实用的攻略", { exact: true }).waitFor();
-  const beforeDirectEntry = stats.submissions;
-  await page.locator("[data-open-comment-replies]").click();
-  await page.getByRole("dialog").getByText("很实用的攻略", { exact: true }).waitFor();
-  assert.equal(stats.submissions, beforeDirectEntry, "从评论任务打开回复弹窗不应自动提交任务");
-  await page.getByRole("button", { name: "关闭" }).click();
+  await page.locator(".history-item").waitFor();
+  assert.equal(await page.locator(".history-item").count(), 1, "小红书评论和回复任务不应出现在采集结果历史");
+  assert.equal(await page.getByText("get_note_comments 测试结果", { exact: true }).count(), 0, "评论任务不应单独显示结果");
+  await page.goto(`${baseUrl}/tasks`);
+  assert.equal(await page.locator(".task-row").count(), 1, "评论和回复任务不应出现在全部任务");
 
   await setTasks(page, [task("kuaishou_search_videos", "kuaishou")]);
   await page.goto(`${baseUrl}/kuaishou/results`);
@@ -247,10 +235,24 @@ async function checkInteractions(browser) {
   const kuaishouCommentRequest = stats.requests.at(-1);
   assert.equal(kuaishouCommentRequest.operation, "kuaishou_get_video_comments");
   assert.deepEqual(kuaishouCommentRequest.input, { max_items: 12, video_url: "https://www.kuaishou.com/short-video/ks-video-1" });
+  await kuaishouDialog.locator("#kuaishou-reply-limit").fill("7");
+  const beforeKuaishouReply = stats.submissions;
+  await kuaishouDialog.getByRole("button", { name: "采集回复", exact: true }).click();
+  assert.equal(stats.submissions, beforeKuaishouReply + 1, "快手评论回复应作为独立任务提交");
+  await kuaishouDialog.getByText("谢谢支持", { exact: true }).waitFor();
+  const kuaishouReplyRequest = stats.requests.at(-1);
+  assert.equal(kuaishouReplyRequest.operation, "kuaishou_get_comment_replies");
+  assert.deepEqual(kuaishouReplyRequest.input, { video_id: "ks-video-1", comment_id: "ks-comment-1", max_items: 7 });
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").some((item) => item.operation === "kuaishou_get_comment_replies" && item.hideFromHistory)), true, "快手回复任务应保存隐藏索引以便刷新后恢复");
+  await page.screenshot({ path: path.join("outputs", "ui-kuaishou-comment-replies.png"), fullPage: true });
   await page.reload();
   await page.getByRole("button", { name: "快手露营记录", exact: true }).click();
   await page.getByRole("dialog").getByText("很喜欢这个视频", { exact: true }).waitFor();
+  await page.getByRole("dialog").getByText("谢谢支持", { exact: true }).waitFor();
   await page.getByRole("button", { name: "关闭" }).click();
+  await page.goto(`${baseUrl}/kuaishou/search`);
+  assert.equal(await page.getByRole("button", { name: "视频评论", exact: true }).count(), 0, "快手评论不应作为独立搜索能力展示");
+  assert.equal(await page.getByRole("button", { name: "评论回复", exact: true }).count(), 0, "快手回复不应作为独立搜索能力展示");
 
   await setTasks(page, [task("douyin_search_videos", "douyin")]);
   await page.goto(`${baseUrl}/douyin/results`);
@@ -292,18 +294,17 @@ async function checkInteractions(browser) {
   await setTasks(page, [task("douyin_search_videos", "douyin")]);
   await page.goto(`${baseUrl}/douyin/results`);
   await page.getByText("厦门咖啡探店").waitFor();
-  const checkboxes = page.locator('[data-video-url]');
-  assert.equal(await checkboxes.nth(0).isEnabled(), true);
-  assert.equal(await checkboxes.nth(1).isEnabled(), false, "零评论视频必须禁止选择");
-  await checkboxes.nth(0).check();
-  const beforeVideo = stats.submissions;
-  await page.getByRole("button", { name: "带入评论采集" }).click();
-  assert.match(await page.locator('textarea[name="awemeUrls"]').inputValue(), /douyin\.com\/video\/123/);
-  assert.equal(stats.submissions, beforeVideo, "抖音评论预填不应自动提交任务");
+  assert.equal(await page.locator('[data-video-url]').count(), 0, "抖音结果不应提供独立批量评论入口");
+  assert.equal(await page.getByRole("button", { name: "带入评论采集" }).count(), 0, "抖音评论只能从视频详情采集");
+
+  await page.goto(`${baseUrl}/douyin/search`);
+  assert.equal(await page.getByRole("button", { name: "评论采集", exact: true }).count(), 0, "抖音搜索页不应展示独立评论采集页签");
 
   await page.goto(`${baseUrl}/weibo/search`);
   await page.getByRole("heading", { name: "微博搜索与采集" }).waitFor();
-  for (const label of ["微博搜索", "微博热搜", "微博详情", "用户资料", "用户微博", "微博评论", "评论回复", "点赞用户", "转发列表"]) assert.equal(await page.getByRole("button", { name: label, exact: true }).count(), 1, `缺少微博能力：${label}`);
+  for (const label of ["微博搜索", "微博热搜", "微博详情", "用户资料", "用户微博", "点赞用户", "转发列表"]) assert.equal(await page.getByRole("button", { name: label, exact: true }).count(), 1, `缺少微博能力：${label}`);
+  assert.equal(await page.getByRole("button", { name: "微博评论", exact: true }).count(), 0, "微博评论不应作为独立搜索能力展示");
+  assert.equal(await page.getByRole("button", { name: "评论回复", exact: true }).count(), 0, "微博回复不应作为独立搜索能力展示");
   assert.equal(await page.locator('input[name="max_items"]').inputValue(), "5", "微博搜索首次采集应默认 5 条");
   await page.getByText("首次采集必须留空", { exact: false }).waitFor();
   await page.locator('input[name="keyword"]').fill("人工智能");
@@ -325,21 +326,25 @@ async function checkInteractions(browser) {
   await setTasks(page, [task("weibo_search_posts", "weibo")]);
   await page.goto(`${baseUrl}/weibo/results`);
   await page.getByText("AI 搜索正在改变内容发现方式", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "AI 搜索正在改变内容发现方式", exact: true }).click();
+  const weiboDialog = page.getByRole("dialog"); await weiboDialog.waitFor();
   const beforeWeiboComments = stats.submissions;
-  await page.getByRole("button", { name: "采集评论", exact: true }).click();
-  assert.equal(await page.locator('input[name="post_id"]').inputValue(), "wb-post-1");
-  assert.equal(stats.submissions, beforeWeiboComments, "微博评论带入不应自动提交任务");
-
-  await setTasks(page, [task("weibo_get_post_comments", "weibo")]);
-  await page.goto(`${baseUrl}/weibo/results`);
-  await page.getByText("这个搜索体验不错", { exact: true }).waitFor();
+  await weiboDialog.getByRole("button", { name: "采集评论", exact: true }).click();
+  assert.equal(stats.submissions, beforeWeiboComments + 1, "微博详情应提交一个评论任务");
+  await weiboDialog.getByText("这个搜索体验不错", { exact: true }).waitFor();
+  const weiboCommentRequest = stats.requests.at(-1); assert.equal(weiboCommentRequest.operation, "weibo_get_post_comments");
+  assert.deepEqual(weiboCommentRequest.input, { max_items: 20, auto_paginate: true, post_url: "https://weibo.com/123/wb-post-1" });
   const beforeWeiboReplies = stats.submissions;
-  await page.getByRole("button", { name: "采集回复", exact: true }).click();
-  assert.equal(await page.locator('input[name="post_id"]').inputValue(), "wb-post-1");
-  assert.equal(await page.locator('input[name="comment_id"]').inputValue(), "wb-comment-1");
-  assert.equal(stats.submissions, beforeWeiboReplies, "微博回复带入不应自动提交任务");
+  await weiboDialog.getByRole("button", { name: "采集回复", exact: true }).click();
+  assert.equal(stats.submissions, beforeWeiboReplies + 1, "微博回复应作为详情内独立任务提交");
+  await weiboDialog.getByText("同意你的看法", { exact: true }).waitFor();
+  const weiboReplyRequest = stats.requests.at(-1); assert.equal(weiboReplyRequest.operation, "weibo_get_post_comment_replies");
+  assert.deepEqual(weiboReplyRequest.input, { post_id: "wb-post-1", comment_id: "wb-comment-1", max_items: 20, auto_paginate: true });
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("ai-search-skill:recent-tasks:v1") || "[]").filter((item) => item.platform === "weibo" && ["weibo_get_post_comments", "weibo_get_post_comment_replies"].includes(item.operation)).every((item) => item.hideFromHistory)), true, "微博评论和回复任务必须隐藏");
+  await page.screenshot({ path: path.join("outputs", "ui-weibo-comment-replies.png"), fullPage: true });
+  await weiboDialog.getByRole("button", { name: "关闭" }).click();
 
-  for (const operation of Object.keys(resultByOperation).filter((value) => value.startsWith("weibo_"))) {
+  for (const operation of Object.keys(resultByOperation).filter((value) => value.startsWith("weibo_") && !["weibo_get_post_comments", "weibo_get_post_comment_replies"].includes(value))) {
     await setTasks(page, [task(operation, "weibo")]);
     await page.goto(`${baseUrl}/weibo/results`);
     await page.locator(".results-main tbody tr").first().waitFor();
@@ -368,6 +373,6 @@ async function checkInteractions(browser) {
   try {
     for (const viewport of viewports) await checkViewport(browser, viewport);
     await checkInteractions(browser);
-    console.log("UI 检查通过：四个平台、设置与任务页、六种视口、微博九项能力及评论回复带入。\n");
+    console.log("UI 检查通过：四个平台、六种视口、详情内评论回复及评论任务隐藏。\n");
   } finally { await browser.close(); }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

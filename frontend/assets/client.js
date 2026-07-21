@@ -25,6 +25,14 @@
     weibo_get_user_info: "用户资料", weibo_list_user_posts: "用户微博", weibo_get_post_comments: "微博评论",
     weibo_get_post_comment_replies: "评论回复", weibo_list_post_likers: "点赞用户", weibo_list_post_reposts: "转发列表",
   };
+  const detailOnlyOperations = new Set([
+    "get_note_comments", "get_note_sub_comments", "douyin_fetch_comments",
+    "kuaishou_get_video_comments", "kuaishou_get_comment_replies",
+    "weibo_get_post_comments", "weibo_get_post_comment_replies",
+  ]);
+  const primaryXhsOperations = new Set(["search_notes", "search_hot_list", "get_note_detail", "get_user_info", "list_user_notes"]);
+  const primaryKuaishouOperations = new Set(["kuaishou_search_videos", "kuaishou_get_video_detail", "kuaishou_get_user_info", "kuaishou_list_user_videos"]);
+  const primaryWeiboOperations = new Set(["weibo_search_posts", "weibo_search_hot_list", "weibo_get_post_detail", "weibo_get_user_info", "weibo_list_user_posts", "weibo_list_post_likers", "weibo_list_post_reposts"]);
   const xhsOperations = {
     search_notes: { title: "笔记搜索", description: "按关键词检索笔记，并控制排序、类型与时间范围。", fields: [
       ["keyword", "搜索关键词", "text", true, "例如：厦门咖啡"], ["max_items", "结果数量", "number", false, "20", 20],
@@ -63,7 +71,7 @@
     config: null, actors: [], actorsError: "", selectedXhsOperation: "search_notes", selectedWeiboOperation: "weibo_search_posts", selectedKuaishouOperation: "kuaishou_search_videos", douyinMode: "search",
     recentTasks: readTasks(), taskDetails: new Map(), results: readResults(), selectedVideos: new Set(),
     selectedPlatformTask: { xiaohongshu: "", douyin: "", kuaishou: "", weibo: "" }, genericTaskId: "", resultFilter: "",
-    xhsPrefill: {}, weiboPrefill: {}, kuaishouPrefill: {}, douyinPrefillUrls: [], activeNote: null, activeDouyinVideo: null, activeKuaishouVideo: null, douyinDetailError: "", douyinDetailBusy: false, douyinCommentTaskId: "", kuaishouDetailError: "", kuaishouDetailBusy: false, kuaishouCommentTaskId: "", commentTaskId: "", commentTaskIds: [],
+    xhsPrefill: {}, weiboPrefill: {}, kuaishouPrefill: {}, douyinPrefillUrls: [], activeNote: null, activeDouyinVideo: null, activeKuaishouVideo: null, activeWeiboPost: null, douyinDetailError: "", douyinDetailBusy: false, douyinCommentTaskId: "", kuaishouDetailError: "", kuaishouDetailBusy: false, kuaishouCommentTaskId: "", kuaishouReplyTaskIds: new Map(), kuaishouReplyBusy: new Set(), weiboDetailError: "", weiboDetailBusy: false, weiboCommentTaskId: "", weiboReplyTaskIds: new Map(), weiboReplyBusy: new Set(), commentTaskId: "", commentTaskIds: [],
     replyTaskIds: new Map(), commentError: "", replyBusy: new Set(), noteDetailTaskId: "", noteDetailError: "", batchReplyPlan: null, batchReplyProgress: null, alert: null, busy: false, polling: new Map(), renderQueued: false,
   };
 
@@ -138,7 +146,8 @@
     return `<span class="status ${escapeAttr(value)}">${escapeHtml(names[value] || value)}</span>`;
   }
   function pageHeader(section, title, description, action = "") { return `<header class="page-header"><div><span class="eyebrow">${escapeHtml(section)}</span><h1>${escapeHtml(title)}</h1><p>${escapeHtml(description)}</p></div>${action ? `<div class="header-actions">${action}</div>` : ""}</header>`; }
-  function platformTasks(platform) { return state.recentTasks.filter((task) => task.platform === platform && !task.hideFromHistory && !(platform === "douyin" && task.operation === "douyin_fetch_comments")); }
+  function isDetailOnlyTask(task) { return Boolean(task?.hideFromHistory) || detailOnlyOperations.has(task?.operation); }
+  function platformTasks(platform) { return state.recentTasks.filter((task) => task.platform === platform && !isDetailOnlyTask(task)); }
   function resultItems(payload) {
     if (Array.isArray(payload)) return payload;
     if (Array.isArray(payload?.items)) return payload.items;
@@ -167,31 +176,24 @@
 
   function renderXhsSearch() {
     const operation = state.selectedXhsOperation; const definition = xhsOperations[operation];
-    const tabs = Object.entries(xhsOperations).map(([id, item]) => `<button type="button" data-xhs-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
+    const tabs = Object.entries(xhsOperations).filter(([id]) => primaryXhsOperations.has(id)).map(([id, item]) => `<button type="button" data-xhs-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
     app.innerHTML = `<div class="page">${pageHeader("小红书插件 / 数据采集", "小红书搜索与采集", "选择采集能力并填写参数，任务统一由上游平台执行和结算。", `<a class="button secondary" href="/xiaohongshu/results" data-link>查看采集结果</a>`)}${alertHtml()}<div class="segmented capability-tabs">${tabs}</div><div class="workspace search-workspace"><section class="panel"><header class="panel-header"><div><h2>搜索参数 · ${escapeHtml(definition.title)}</h2><p>${escapeHtml(definition.description)}</p></div>${hasOperation(operation) ? statusHtml("connected") : statusHtml("error")}</header><form id="xhs-form" class="panel-body"><div class="form-grid">${definition.fields.map(fieldHtml).join("")}</div>${definition.oneOf ? `<p class="form-hint">${definition.oneOf.map((key) => `<code>${key}</code>`).join(" 或 ")} 至少填写一项。</p>` : ""}<div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>${state.busy ? "提交中..." : "开始采集"}</button></div></form></section>${taskContextHtml("xiaohongshu", operation)}</div></div>`;
   }
 
   function renderDouyinSearch() {
-    const operation = state.douyinMode === "comments" ? "douyin_fetch_comments" : "douyin_search_videos";
-    const tabs = `<button type="button" data-douyin-mode="search" class="${state.douyinMode === "search" ? "active" : ""}">视频搜索</button><button type="button" data-douyin-mode="comments" class="${state.douyinMode === "comments" ? "active" : ""}">评论采集</button>`;
-    let form;
-    if (state.douyinMode === "search") {
-      form = `<form id="douyin-search-form" class="panel-body"><div class="form-grid"><label class="field wide"><span>搜索关键词 *</span><textarea name="keywords" rows="3" required placeholder="每行一个关键词，最多 5 个"></textarea></label><label class="field"><span>每个关键词结果数</span><input name="maxResultsPerQuery" type="number" min="1" max="200" value="10" required /></label><label class="field"><span>排序</span><select name="sort"><option value="general">综合</option><option value="most_liked">最多点赞</option><option value="latest">最新发布</option></select></label><label class="field"><span>发布时间</span><select name="publishTime"><option value="unlimited">不限</option><option value="one_day">一天内</option><option value="one_week">一周内</option><option value="half_year">半年内</option></select></label><label class="field"><span>视频时长</span><select name="duration"><option value="unlimited">不限</option><option value="under_1m">1 分钟内</option><option value="one_to_five">1 至 5 分钟</option><option value="over_5m">5 分钟以上</option></select></label></div><div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>开始搜索</button></div></form>`;
-    } else {
-      form = `<form id="douyin-comments-form" class="panel-body"><div class="form-grid"><label class="field wide"><span>视频链接或 ID *</span><textarea name="awemeUrls" rows="5" required placeholder="每行一个抖音视频链接或数字 ID">${escapeHtml(state.douyinPrefillUrls.join("\n"))}</textarea></label><label class="field"><span>每个视频评论数</span><input name="maxCommentsPerAweme" type="number" min="1" max="200" value="10" required /></label><label class="check-field"><input id="includeReplies" name="includeReplies" type="checkbox" /><span>同时采集评论回复</span></label><label class="field"><span>每条评论回复上限</span><input id="maxRepliesPerComment" name="maxRepliesPerComment" type="number" min="1" max="200" value="10" disabled /></label></div><div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>开始采集评论</button></div></form>`;
-    }
-    app.innerHTML = `<div class="page">${pageHeader("抖音插件 / 数据采集", "抖音搜索与采集", "搜索视频，或使用结果页选中的视频采集评论与回复。", `<a class="button secondary" href="/douyin/results" data-link>查看采集结果</a>`)}${alertHtml()}<div class="segmented capability-tabs">${tabs}</div><div class="workspace search-workspace"><section class="panel"><header class="panel-header"><div><h2>${escapeHtml(operationLabels[operation])}参数</h2><p>${state.douyinMode === "search" ? "按关键词筛选抖音视频" : "批量采集视频评论，可选择包含回复"}</p></div>${hasOperation(operation) ? statusHtml("connected") : statusHtml("error")}</header>${form}</section>${taskContextHtml("douyin", operation)}</div></div>`;
-    document.querySelector("#includeReplies")?.addEventListener("change", (event) => { const input = document.querySelector("#maxRepliesPerComment"); if (input) input.disabled = !event.target.checked; });
+    const operation = "douyin_search_videos";
+    const form = `<form id="douyin-search-form" class="panel-body"><div class="form-grid"><label class="field wide"><span>搜索关键词 *</span><textarea name="keywords" rows="3" required placeholder="每行一个关键词，最多 5 个"></textarea></label><label class="field"><span>每个关键词结果数</span><input name="maxResultsPerQuery" type="number" min="1" max="200" value="10" required /></label><label class="field"><span>排序</span><select name="sort"><option value="general">综合</option><option value="most_liked">最多点赞</option><option value="latest">最新发布</option></select></label><label class="field"><span>发布时间</span><select name="publishTime"><option value="unlimited">不限</option><option value="one_day">一天内</option><option value="one_week">一周内</option><option value="half_year">半年内</option></select></label><label class="field"><span>视频时长</span><select name="duration"><option value="unlimited">不限</option><option value="under_1m">1 分钟内</option><option value="one_to_five">1 至 5 分钟</option><option value="over_5m">5 分钟以上</option></select></label></div><div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>开始搜索</button></div></form>`;
+    app.innerHTML = `<div class="page">${pageHeader("抖音插件 / 数据采集", "抖音搜索与采集", "先搜索视频；评论和回复仅在视频详情中采集和展示。", `<a class="button secondary" href="/douyin/results" data-link>查看采集结果</a>`)}${alertHtml()}<div class="workspace search-workspace"><section class="panel"><header class="panel-header"><div><h2>视频搜索参数</h2><p>按关键词筛选抖音视频</p></div>${hasOperation(operation) ? statusHtml("connected") : statusHtml("error")}</header>${form}</section>${taskContextHtml("douyin", operation)}</div></div>`;
   }
 
   function renderWeiboSearch() {
     const operation = state.selectedWeiboOperation; const definition = weiboOperations[operation];
-    const tabs = Object.entries(weiboOperations).map(([id, item]) => `<button type="button" data-weibo-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
+    const tabs = Object.entries(weiboOperations).filter(([id]) => primaryWeiboOperations.has(id)).map(([id, item]) => `<button type="button" data-weibo-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
     app.innerHTML = `<div class="page">${pageHeader("微博插件 / 数据采集", "微博搜索与采集", "搜索微博、热搜、用户和互动数据，任务由上游平台统一执行和计费。", `<a class="button secondary" href="/weibo/results" data-link>查看采集结果</a>`)}${alertHtml()}<div class="segmented capability-tabs">${tabs}</div><div class="workspace search-workspace"><section class="panel"><header class="panel-header"><div><h2>采集参数 · ${escapeHtml(definition.title)}</h2><p>${escapeHtml(definition.description)}</p></div>${hasOperation(operation) ? statusHtml("connected") : statusHtml("error")}</header><form id="weibo-form" class="panel-body"><div class="form-grid">${definition.fields.map((field) => fieldHtml(field, state.weiboPrefill)).join("")}</div>${definition.oneOf ? `<p class="form-hint">${definition.oneOf.map((key) => `<code>${key}</code>`).join(" 或 ")} 至少填写一项。</p>` : ""}<div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>${state.busy ? "提交中..." : "开始采集"}</button></div></form></section>${taskContextHtml("weibo", operation)}</div></div>`;
   }
   function renderKuaishouSearch() {
     const operation = state.selectedKuaishouOperation; const definition = kuaishouOperations[operation];
-    const tabs = Object.entries(kuaishouOperations).map(([id, item]) => `<button type="button" data-kuaishou-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
+    const tabs = Object.entries(kuaishouOperations).filter(([id]) => primaryKuaishouOperations.has(id)).map(([id, item]) => `<button type="button" data-kuaishou-operation="${id}" class="${id === operation ? "active" : ""}">${escapeHtml(item.title)}</button>`).join("");
     app.innerHTML = `<div class="page">${pageHeader("快手插件 / 数据采集", "快手搜索与采集", "搜索视频、获取一级评论与二级回复，并采集博主资料和作品。", `<a class="button secondary" href="/kuaishou/results" data-link>查看采集结果</a>`)}${alertHtml()}<div class="segmented capability-tabs">${tabs}</div><div class="workspace search-workspace"><section class="panel"><header class="panel-header"><div><h2>采集参数 · ${escapeHtml(definition.title)}</h2><p>${escapeHtml(definition.description)}</p></div>${hasOperation(operation) ? statusHtml("connected") : statusHtml("error")}</header><form id="kuaishou-form" class="panel-body"><div class="form-grid">${definition.fields.map((field) => fieldHtml(field, state.kuaishouPrefill)).join("")}</div>${definition.oneOf ? `<p class="form-hint">${definition.oneOf.map((key) => `<code>${key}</code>`).join(" 或 ")} 至少填写一项。</p>` : ""}<div class="actions form-actions"><button class="button primary" type="submit" ${!hasOperation(operation) || state.busy ? "disabled" : ""}>${state.busy ? "提交中..." : "开始采集"}</button></div></form></section>${taskContextHtml("kuaishou", operation)}</div></div>`;
   }
 
@@ -313,7 +315,6 @@
     if (taskMeta.operation === "douyin_search_videos") {
       const totals = (keys) => items.reduce((sum, item) => sum + douyinStat(item, keys), 0);
       const columns = [
-        { label: "选择", render: (item) => { const url = String(douyinUrl(item)); const selectable = Boolean(url) && douyinStat(item, ["commentCount", "comment_count"]) > 0; return `<input type="checkbox" data-video-url="${escapeAttr(url)}" ${state.selectedVideos.has(url) ? "checked" : ""} ${selectable ? "" : "disabled"} aria-label="选择视频" />`; } },
         { label: "视频标题", render: (item, index) => `<button class="note-title-link" type="button" data-open-douyin-detail data-task-id="${escapeAttr(taskId)}" data-item-index="${index}">${escapeHtml(douyinTitle(item))}</button>` },
         { label: "作者", render: (item) => `<div class="identity-cell compact-identity">${image(douyinAvatar(item), douyinAuthor(item).name || douyinAuthor(item).nickname || "作者")}<div><strong>${escapeHtml(douyinAuthor(item).name || douyinAuthor(item).nickname || "未知作者")}</strong><small>${escapeHtml(String(douyinAuthor(item).uniqueId || douyinAuthor(item).id || "-"))}</small></div></div>` },
         { label: "播放", render: (item) => number(douyinStat(item, ["playCount", "play_count"])), numeric: true },
@@ -323,7 +324,7 @@
         { label: "分享", render: (item) => number(douyinStat(item, ["shareCount", "share_count"])), numeric: true },
         { label: "发布时间", render: (item) => escapeHtml(formatDate(firstValue(item, ["createDate", "createTime", "create_date", "create_time"], ""))) },
       ];
-      return `<div class="metrics">${metric("视频", number(items.length), "当前结果")}${metric("播放", number(totals(["playCount", "play_count"])), "合计")}${metric("点赞", number(totals(["diggCount", "digg_count"])), "合计")}${metric("评论", number(totals(["commentCount", "comment_count"])), "可采集")}</div><div class="selection-toolbar"><span>已选择 <strong id="selection-count">${state.selectedVideos.size}</strong> 个有评论的视频</span><button class="button primary" type="button" data-use-selected-videos ${state.selectedVideos.size ? "" : "disabled"}>带入评论采集</button></div>${table(columns, items, taskId, (_, index) => `<button class="button secondary compact" type="button" data-open-douyin-detail data-task-id="${escapeAttr(taskId)}" data-item-index="${index}">详情</button>`)}`;
+      return `<div class="metrics">${metric("视频", number(items.length), "当前结果")}${metric("播放", number(totals(["playCount", "play_count"])), "合计")}${metric("点赞", number(totals(["diggCount", "digg_count"])), "合计")}${metric("评论", number(totals(["commentCount", "comment_count"])), "进入详情采集")}</div>${table(columns, items, taskId, (_, index) => `<button class="button secondary compact" type="button" data-open-douyin-detail data-task-id="${escapeAttr(taskId)}" data-item-index="${index}">详情</button>`)}`;
     }
     const groups = new Map();
     for (const item of items) { const id = String(item.awemeId || item.aweme_id || item.videoId || item.video_id || "未知视频"); if (!groups.has(id)) groups.set(id, []); groups.get(id).push(item); }
@@ -344,13 +345,35 @@
   function weiboContent(item) { return String(firstValue(item, ["content", "text_raw", "text", "title", "description"], "-")); }
   function weiboCount(item, keys) { return Number(firstValue(item, keys, 0)) || 0; }
   function weiboIdentity(item) { return `<div class="identity-cell compact-identity">${image(weiboAvatar(item), weiboUserName(item))}<div><strong>${escapeHtml(weiboUserName(item))}</strong><small>${escapeHtml(weiboUserId(item) || "-")}</small></div></div>`; }
+  function weiboPostKey(item) { return weiboPostUrl(item) || weiboPostId(item); }
+  function weiboCommentId(item) { return String(firstValue(item, ["comment_id", "idstr", "id"], "")); }
+  function weiboHasReplies(item) { return weiboCount(item, ["reply_count", "total_number"]) > 0; }
+  function renderWeiboReplies(comment) {
+    const commentId = weiboCommentId(comment); const taskId = state.weiboReplyTaskIds.get(commentId); if (!taskId) return "";
+    const task = state.taskDetails.get(taskId) || {}; const replies = resultItems(state.results.get(taskId));
+    if (!terminalStatuses.has(task.status)) return `<div class="modal-reply-list kuaishou-reply-list"><span>正在采集回复...</span></div>`;
+    if (task.status !== "settled") return `<div class="modal-reply-list kuaishou-reply-list"><p class="modal-error">${escapeHtml(task.error_message || "回复采集未完成")}</p></div>`;
+    return `<div class="modal-reply-list kuaishou-reply-list">${replies.length ? replies.map((reply) => `<div class="kuaishou-reply-item">${weiboIdentity(reply)}<p>${escapeHtml(weiboContent(reply))}</p><footer><span>点赞 ${number(weiboCount(reply, ["like_count", "like_counts"]))}</span><span>${escapeHtml(formatDate(firstValue(reply, ["publish_time", "created_at", "create_time"])))}</span></footer></div>`).join("") : `<span>任务完成，没有返回公开回复。</span>`}</div>`;
+  }
+  function renderWeiboCollectedComments() {
+    const taskId = state.weiboCommentTaskId; if (!taskId) return "";
+    const task = state.taskDetails.get(taskId) || {}; const comments = resultItems(state.results.get(taskId));
+    if (!terminalStatuses.has(task.status)) return `<section class="douyin-detail-comments"><header><strong>评论</strong>${statusHtml(task.status)}</header><div class="empty-comments"><strong>正在采集评论</strong><span>任务完成后将在此处展示。</span></div></section>`;
+    if (task.status !== "settled") return `<section class="douyin-detail-comments"><header><strong>评论</strong>${statusHtml(task.status)}</header><p class="modal-error">${escapeHtml(task.error_message || "评论采集未完成")}</p></section>`;
+    return `<section class="douyin-detail-comments"><header><strong>评论 ${number(comments.length)}</strong><span>评论和回复仅保留在当前详情</span></header>${comments.length ? `<div class="kuaishou-reply-settings"><div><strong>评论回复</strong><small>只为存在回复的一级评论创建独立任务</small></div><label class="field"><span>每条回复数量</span><input id="weibo-reply-limit" type="number" min="1" max="100" value="20" /></label></div><div class="douyin-comment-list">${comments.map((comment) => { const commentId = weiboCommentId(comment); const postId = String(firstValue(comment, ["post_id", "mid"], weiboPostId(state.activeWeiboPost))); const hasReplies = weiboHasReplies(comment); const busy = state.weiboReplyBusy.has(commentId); return `<article>${weiboIdentity(comment)}<p>${escapeHtml(weiboContent(comment))}</p><footer><span>点赞 ${number(weiboCount(comment, ["like_count", "like_counts"]))}</span><span>${hasReplies ? `回复 ${number(weiboCount(comment, ["reply_count", "total_number"]))}` : "暂无回复"}</span><span>${escapeHtml(formatDate(firstValue(comment, ["publish_time", "created_at", "create_time"])))}</span>${hasReplies ? `<button class="button secondary compact" type="button" data-weibo-collect-replies data-post-id="${escapeAttr(postId)}" data-comment-id="${escapeAttr(commentId)}" ${!postId || !commentId || busy ? "disabled" : ""}>${busy ? "采集中..." : state.weiboReplyTaskIds.has(commentId) ? "重新采集回复" : "采集回复"}</button>` : ""}</footer>${renderWeiboReplies(comment)}</article>`; }).join("")}</div>` : `<div class="empty-comments"><strong>没有公开评论</strong><span>任务已完成，但未返回评论数据。</span></div>`}</section>`;
+  }
+  function renderWeiboDetailModal() {
+    const item = state.activeWeiboPost; if (!item) return "";
+    const postId = weiboPostId(item); const postUrl = weiboPostUrl(item);
+    return `<div class="modal-backdrop" data-weibo-modal-backdrop><section class="douyin-detail-modal weibo-detail-modal" role="dialog" aria-modal="true" aria-labelledby="weibo-detail-title"><button class="modal-close" type="button" data-action="close-weibo-detail" aria-label="关闭">×</button><div class="douyin-detail-media"><div class="douyin-detail-cover douyin-cover-placeholder"><span>微博内容</span></div></div><div class="douyin-detail-side"><div class="douyin-detail-scroll"><header class="douyin-author-row">${image(weiboAvatar(item), weiboUserName(item), "douyin-author-avatar")}<div><strong>${escapeHtml(weiboUserName(item))}</strong><small>${escapeHtml(weiboUserId(item) || "")}</small></div></header><section class="douyin-detail-copy"><h2 id="weibo-detail-title">${escapeHtml(weiboContent(item))}</h2><div class="douyin-detail-stats"><span>点赞 ${number(weiboCount(item, ["like_count", "attitudes_count"]))}</span><span>评论 ${number(weiboCount(item, ["comment_count", "comments_count"]))}</span><span>转发 ${number(weiboCount(item, ["repost_count", "reposts_count"]))}</span></div><footer><span>发布于 ${escapeHtml(formatDate(firstValue(item, ["publish_time", "created_at", "create_time"])))}</span><span>微博 ID ${escapeHtml(postId || "-")}</span>${postUrl ? `<a href="${escapeAttr(postUrl)}" target="_blank" rel="noopener">打开微博原文</a>` : ""}</footer></section><section class="douyin-collection"><header><div><strong>采集评论</strong><small>评论只在当前微博详情中展示</small></div></header>${state.weiboDetailError ? `<p class="modal-error">${escapeHtml(state.weiboDetailError)}</p>` : ""}<form id="weibo-detail-comments-form" class="douyin-collection-form"><label class="field"><span>评论条数</span><input name="max_items" type="number" min="1" max="100" value="20" required ${state.weiboDetailBusy ? "disabled" : ""} /></label><button class="button primary" type="submit" ${!weiboPostKey(item) || state.weiboDetailBusy ? "disabled" : ""}>${state.weiboDetailBusy ? "提交中..." : "采集评论"}</button></form></section>${renderWeiboCollectedComments()}</div></div></section></div>`;
+  }
 
   function renderWeiboData(taskMeta, detail, payload) {
     const items = resultItems(payload); const operation = taskMeta.operation; const taskId = taskMeta.id;
     const postOperations = new Set(["weibo_search_posts", "weibo_get_post_detail", "weibo_list_user_posts"]);
     if (postOperations.has(operation)) {
       const columns = [
-        { label: "微博内容", render: (item) => `<div class="comment-content"><strong>${escapeHtml(weiboContent(item))}</strong><small>${escapeHtml(weiboPostId(item) || "-")}</small></div>` },
+        { label: "微博内容", render: (item, index) => `<div class="comment-content"><button class="note-title-link" type="button" data-open-weibo-detail data-task-id="${escapeAttr(taskId)}" data-item-index="${index}">${escapeHtml(weiboContent(item))}</button><small>${escapeHtml(weiboPostId(item) || "-")}</small></div>` },
         { label: "用户", render: weiboIdentity },
         { label: "点赞", render: (item) => number(weiboCount(item, ["like_count", "attitudes_count"])), numeric: true },
         { label: "评论", render: (item) => number(weiboCount(item, ["comment_count", "comments_count"])), numeric: true },
@@ -360,7 +383,7 @@
       const likes = items.reduce((sum, item) => sum + weiboCount(item, ["like_count", "attitudes_count"]), 0);
       const comments = items.reduce((sum, item) => sum + weiboCount(item, ["comment_count", "comments_count"]), 0);
       const reposts = items.reduce((sum, item) => sum + weiboCount(item, ["repost_count", "reposts_count"]), 0);
-      return `<div class="metrics">${metric("微博", number(items.length), "当前结果")}${metric("点赞", number(likes), "合计")}${metric("评论", number(comments), "可继续采集")}${metric("转发", number(reposts), "合计")}</div>${table(columns, items, taskId, (item, index) => `<button class="button primary compact" type="button" data-weibo-comments data-post-id="${escapeAttr(weiboPostId(item))}" data-post-url="${escapeAttr(weiboPostUrl(item))}">采集评论</button>${weiboPostUrl(item) ? `<a class="button secondary compact" href="${escapeAttr(weiboPostUrl(item))}" target="_blank" rel="noopener">原文</a>` : ""}<button class="button secondary compact" type="button" data-detail-index="${index}" data-task-id="${escapeAttr(taskId)}">详情</button>`)}`;
+      return `<div class="metrics">${metric("微博", number(items.length), "当前结果")}${metric("点赞", number(likes), "合计")}${metric("评论", number(comments), "进入详情采集")}${metric("转发", number(reposts), "合计")}</div>${table(columns, items, taskId, (_, index) => `<button class="button secondary compact" type="button" data-open-weibo-detail data-task-id="${escapeAttr(taskId)}" data-item-index="${index}">详情</button>`)}`;
     }
     if (operation === "weibo_search_hot_list") {
       const columns = [{ label: "排名", render: (item, index) => number(firstValue(item, ["rank", "rank_num"], index + 1)), numeric: true }, { label: "热搜词", render: (item) => escapeHtml(firstValue(item, ["keyword", "title", "note", "word"], "-")) }, { label: "热度", render: (item) => number(firstValue(item, ["hot_value", "num", "raw_hot"], 0)), numeric: true }, { label: "分类", render: (item) => escapeHtml(firstValue(item, ["category", "label_name", "icon_desc"], "-")) }];
@@ -384,13 +407,23 @@
   function kuaishouCover(item) { return String(kuaishouValue(item, ["cover_url", "coverUrl", "cover", "cover_image", "coverImage", "thumbnail_url", "thumbnail"], "")); }
   function kuaishouAvatar(item) { return String(kuaishouValue(item, ["avatar_url", "avatarUrl", "avatar", "head_url", "headUrl"], "")); }
   function kuaishouVideoKey(item) { return kuaishouVideoUrl(item) || kuaishouVideoId(item); }
+  function kuaishouCommentId(item) { return String(kuaishouValue(item, ["comment_id", "id"], "")); }
+  function kuaishouCommentPhotoId(item) { return String(kuaishouValue(item, ["photo_id", "video_id", "work_id"], "")); }
+  function kuaishouHasReplies(item) { return Boolean(item?.has_replies) || kuaishouCount(item, ["reply_count", "sub_comment_count", "replyCount"]) > 0; }
+  function renderKuaishouReplies(comment) {
+    const commentId = kuaishouCommentId(comment); const taskId = state.kuaishouReplyTaskIds.get(commentId); if (!taskId) return "";
+    const task = state.taskDetails.get(taskId) || {}; const replies = resultItems(state.results.get(taskId));
+    if (!terminalStatuses.has(task.status)) return `<div class="modal-reply-list"><span>正在采集回复...</span></div>`;
+    if (task.status !== "settled") return `<div class="modal-reply-list"><p class="modal-error">${escapeHtml(task.error_message || "回复采集未完成")}</p></div>`;
+    return `<div class="modal-reply-list kuaishou-reply-list">${replies.length ? replies.map((reply) => `<div class="kuaishou-reply-item"><div class="identity-cell compact-identity">${image(kuaishouAvatar(reply), kuaishouUserName(reply), "comment-avatar")}<div><strong>${escapeHtml(kuaishouUserName(reply))}</strong></div></div><p>${escapeHtml(kuaishouValue(reply, ["content", "text", "comment"], "-"))}</p><footer><span>点赞 ${number(kuaishouCount(reply, ["like_count", "liked_count", "likeCount"]))}</span><span>${escapeHtml(formatDate(kuaishouValue(reply, ["publish_time", "created_at", "create_time", "timestamp"])))}</span></footer></div>`).join("") : `<span>任务完成，没有返回公开回复。</span>`}</div>`;
+  }
   function renderKuaishouCollectedComments() {
     const taskId = state.kuaishouCommentTaskId;
     if (!taskId) return "";
     const task = state.taskDetails.get(taskId) || {}; const items = resultItems(state.results.get(taskId));
     if (!terminalStatuses.has(task.status)) return `<section class="douyin-detail-comments kuaishou-detail-comments"><header><strong>评论</strong>${statusHtml(task.status)}</header><div class="empty-comments"><strong>正在采集评论</strong><span>任务完成后将在此处展示。</span></div></section>`;
     if (task.status !== "settled") return `<section class="douyin-detail-comments kuaishou-detail-comments"><header><strong>评论</strong>${statusHtml(task.status)}</header><p class="modal-error">${escapeHtml(task.error_message || "评论采集未完成")}</p></section>`;
-    return `<section class="douyin-detail-comments kuaishou-detail-comments"><header><strong>评论 ${number(items.length)}</strong><span>本次采集结果</span></header>${items.length ? `<div class="douyin-comment-list">${items.map((comment) => { const user = kuaishouUser(comment); return `<article><div class="identity-cell compact-identity">${image(kuaishouAvatar(comment), kuaishouUserName(comment), "comment-avatar")}<div><strong>${escapeHtml(kuaishouUserName(comment))}</strong><small>${escapeHtml(kuaishouValue(comment, ["ip_location", "region", "location"], ""))}</small></div></div><p>${escapeHtml(kuaishouValue(comment, ["content", "text", "comment"], "-"))}</p><footer><span>点赞 ${number(kuaishouCount(comment, ["like_count", "liked_count", "likeCount"]))}</span><span>回复 ${number(kuaishouCount(comment, ["reply_count", "sub_comment_count", "replyCount"]))}</span><span>${escapeHtml(formatDate(kuaishouValue(comment, ["publish_time", "created_at", "create_time", "timestamp"])))}</span></footer></article>`; }).join("")}</div>` : `<div class="empty-comments"><strong>没有公开评论</strong><span>任务已完成，但未返回评论数据。</span></div>`}</section>`;
+    return `<section class="douyin-detail-comments kuaishou-detail-comments"><header><strong>评论 ${number(items.length)}</strong><span>一级评论已完成；回复按需单独采集</span></header>${items.length ? `<div class="kuaishou-reply-settings"><div><strong>评论回复</strong><small>只为有回复的一级评论创建独立任务</small></div><label class="field"><span>每条回复数量</span><input id="kuaishou-reply-limit" type="number" min="1" max="100" value="20" /></label></div><div class="douyin-comment-list">${items.map((comment) => { const commentId = kuaishouCommentId(comment); const photoId = kuaishouCommentPhotoId(comment); const busy = state.kuaishouReplyBusy.has(commentId); const hasReplies = kuaishouHasReplies(comment); return `<article><div class="identity-cell compact-identity">${image(kuaishouAvatar(comment), kuaishouUserName(comment), "comment-avatar")}<div><strong>${escapeHtml(kuaishouUserName(comment))}</strong><small>${escapeHtml(kuaishouValue(comment, ["ip_location", "region", "location"], ""))}</small></div></div><p>${escapeHtml(kuaishouValue(comment, ["content", "text", "comment"], "-"))}</p><footer><span>点赞 ${number(kuaishouCount(comment, ["like_count", "liked_count", "likeCount"]))}</span><span>${hasReplies ? "存在回复" : "暂无回复"}</span><span>${escapeHtml(formatDate(kuaishouValue(comment, ["publish_time", "created_at", "create_time", "timestamp"])))}</span>${hasReplies ? `<button class="button secondary compact" type="button" data-kuaishou-collect-replies data-photo-id="${escapeAttr(photoId)}" data-comment-id="${escapeAttr(commentId)}" ${!photoId || !commentId || busy ? "disabled" : ""}>${busy ? "采集中..." : state.kuaishouReplyTaskIds.has(commentId) ? "重新采集回复" : "采集回复"}</button>` : ""}</footer>${renderKuaishouReplies(comment)}</article>`; }).join("")}</div>` : `<div class="empty-comments"><strong>没有公开评论</strong><span>任务已完成，但未返回评论数据。</span></div>`}</section>`;
   }
   function renderKuaishouDetailModal() {
     const item = state.activeKuaishouVideo;
@@ -419,7 +452,7 @@
     return `<div class="page result-page">${pageHeader(`${name}插件 / 数据结果`, `${name}采集结果`, "按任务查看上游采集数据，完整结果不会保存在本地。", `<a class="button secondary" href="${searchRoute}" data-link>返回搜索与采集</a>`)}${alertHtml()}<div class="results-layout"><aside class="history-panel"><header><span>历史结果</span><strong>${platformTasks(platform).length} 份</strong><small>最近 50 个本地任务索引</small></header><div class="history-list">${historyHtml(platform)}</div></aside><section class="results-main">${content}</section></div></div>`;
   }
   function renderPlatformResults(platform) {
-    const selectedId = state.selectedPlatformTask[platform]; const taskMeta = state.recentTasks.find((item) => item.id === selectedId);
+    const visibleTasks = platformTasks(platform); const selectedId = visibleTasks.some((item) => item.id === state.selectedPlatformTask[platform]) ? state.selectedPlatformTask[platform] : visibleTasks[0]?.id || ""; state.selectedPlatformTask[platform] = selectedId; const taskMeta = visibleTasks.find((item) => item.id === selectedId);
     if (!taskMeta) { app.innerHTML = resultShell(platform, `<div class="empty result-empty"><strong>暂无采集结果</strong><span>先提交一个采集任务，完成后会显示在这里。</span><a class="button primary" href="/${platform}/search" data-link>开始搜索与采集</a></div>`); return; }
     const detail = state.taskDetails.get(selectedId) || {}; const payload = state.results.get(selectedId);
     let dataContent = `<div class="empty">正在读取任务状态...</div>`;
@@ -430,7 +463,7 @@
   }
 
   function renderTasks() {
-    const rows = state.recentTasks.filter((item) => !item.hideFromHistory).map((item) => { const detail = state.taskDetails.get(item.id) || {}; const route = item.platform === "douyin" ? "/douyin/results" : item.platform === "kuaishou" ? "/kuaishou/results" : item.platform === "weibo" ? "/weibo/results" : "/xiaohongshu/results"; return `<div class="task-row"><span>${formatDate(item.submittedAt)}</span><div><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.id)} · ${(detail.provider || item.provider) === "apify" ? "Apify 官方" : "平台网关"}</small></div><span>${escapeHtml(operationLabels[item.operation] || item.operation)}</span>${statusHtml(detail.status)}<span class="numeric">${escapeHtml(feeText(detail, item))}</span><div class="row-actions"><button class="button secondary compact" type="button" data-view-task="${escapeAttr(item.id)}">详情</button><button class="button secondary compact" type="button" data-open-platform-result="${escapeAttr(item.id)}" data-platform="${escapeAttr(item.platform)}" data-route-target="${route}">平台结果</button></div></div>`; }).join("");
+    const rows = state.recentTasks.filter((item) => !isDetailOnlyTask(item)).map((item) => { const detail = state.taskDetails.get(item.id) || {}; const route = item.platform === "douyin" ? "/douyin/results" : item.platform === "kuaishou" ? "/kuaishou/results" : item.platform === "weibo" ? "/weibo/results" : "/xiaohongshu/results"; return `<div class="task-row"><span>${formatDate(item.submittedAt)}</span><div><strong>${escapeHtml(item.displayName)}</strong><small>${escapeHtml(item.id)} · ${(detail.provider || item.provider) === "apify" ? "Apify 官方" : "平台网关"}</small></div><span>${escapeHtml(operationLabels[item.operation] || item.operation)}</span>${statusHtml(detail.status)}<span class="numeric">${escapeHtml(feeText(detail, item))}</span><div class="row-actions"><button class="button secondary compact" type="button" data-view-task="${escapeAttr(item.id)}">详情</button><button class="button secondary compact" type="button" data-open-platform-result="${escapeAttr(item.id)}" data-platform="${escapeAttr(item.platform)}" data-route-target="${route}">平台结果</button></div></div>`; }).join("");
     app.innerHTML = `<div class="page">${pageHeader("任务 / 跨平台监控", "全部任务", "查看小红书、抖音、快手和微博任务状态、结算点数和通用结果。", `<button class="button secondary" type="button" data-action="refresh-tasks">刷新状态</button>`)}${alertHtml()}<section class="panel"><header class="panel-header"><div><h2>最近任务</h2><p>本地仅保存最近 50 个任务索引</p></div><button class="button danger compact" type="button" data-action="clear-tasks">清空索引</button></header>${rows ? `<div class="task-list">${rows}</div>` : `<div class="empty">尚未提交任务</div>`}</section>${renderGenericResult()}</div>`;
   }
   function renderGenericResult() {
@@ -453,6 +486,7 @@
     if (state.activeNote) app.insertAdjacentHTML("beforeend", renderCommentsModal());
     if (state.activeDouyinVideo) app.insertAdjacentHTML("beforeend", renderDouyinDetailModal());
     if (state.activeKuaishouVideo) app.insertAdjacentHTML("beforeend", renderKuaishouDetailModal());
+    if (state.activeWeiboPost) app.insertAdjacentHTML("beforeend", renderWeiboDetailModal());
     updateConnectionSummary();
   }
   function queueRender() {
@@ -478,8 +512,8 @@
     if (!state.config?.api_key_configured) throw new Error("尚未配置 Apify API Token，请到“API配置”完成设置。");
     const actor = actorFor(operation); if (!actor) throw new Error(`Apify 账户未提供${operationLabels[operation]}能力，请在“API配置”刷新并确认 Token 权限。`);
     const task = await requestJson("/api/client/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actor_id: actor.actor_id, operation, input, idempotency_key: makeIdempotencyKey() }) });
-    const { selectResult = true, storeTask = true, ...storedMetadata } = metadata;
-    if (storeTask) rememberTask(task, { platform, operation, displayName, ...storedMetadata });
+    const detailOnly = detailOnlyOperations.has(operation); const { selectResult = !detailOnly, storeTask = true, ...storedMetadata } = metadata;
+    if (storeTask) rememberTask(task, { platform, operation, displayName, ...storedMetadata, ...(detailOnly ? { hideFromHistory: true } : {}) });
     else state.taskDetails.set(String(task.id), task);
     if (selectResult) state.selectedPlatformTask[platform] = String(task.id);
     startPolling(String(task.id)); return task;
@@ -492,16 +526,18 @@
     return task;
   }
   async function ensurePlatformSelection(platform, preferred = "") {
-    const tasks = platformTasks(platform); const id = preferred || state.selectedPlatformTask[platform] || tasks[0]?.id || ""; state.selectedPlatformTask[platform] = id;
+    const tasks = platformTasks(platform); const available = new Set(tasks.map((task) => task.id)); const candidate = preferred || state.selectedPlatformTask[platform] || ""; const id = available.has(candidate) ? candidate : tasks[0]?.id || ""; state.selectedPlatformTask[platform] = id;
     if (!id) return;
     try { await refreshTask(id); } catch (error) { setAlert("error", error.message); }
   }
   function startPolling(taskId) {
     if (state.polling.has(taskId)) return;
-    const tick = async () => { const modalTask = isActiveNoteTask(taskId); const previous = state.taskDetails.get(taskId); try { const task = await refreshTask(taskId); const changed = !previous || previous.status !== task.status || previous.item_count !== task.item_count || previous.billed_points !== task.billed_points || previous.error_message !== task.error_message; const path = normalizeRoute(location.pathname); if (state.activeNote) { if (modalTask && changed) refreshActiveNoteModal(); return; } if (state.activeDouyinVideo && taskId === state.douyinCommentTaskId) { if (changed) queueRender(); return; } if (state.activeKuaishouVideo && taskId === state.kuaishouCommentTaskId) { if (changed) queueRender(); return; } if (!changed) return; if (path === "/tasks") { queueRender(); return; } if (path.endsWith("/results") && state.selectedPlatformTask[platformFromPath(path)] === taskId) queueRender(); } catch (error) { stopPolling(taskId); if (state.activeNote) { if (modalTask) { state.commentError = error.message; refreshActiveNoteModal(); } return; } if (state.activeDouyinVideo && taskId === state.douyinCommentTaskId) { state.douyinDetailError = error.message; queueRender(); return; } if (state.activeKuaishouVideo && taskId === state.kuaishouCommentTaskId) { state.kuaishouDetailError = error.message; queueRender(); return; } const path = normalizeRoute(location.pathname); if (path === "/tasks" || (path.endsWith("/results") && state.selectedPlatformTask[platformFromPath(path)] === taskId)) { setAlert("error", error.message); queueRender(); } } };
+    const tick = async () => { const modalTask = isActiveNoteTask(taskId); const previous = state.taskDetails.get(taskId); try { const task = await refreshTask(taskId); const changed = !previous || previous.status !== task.status || previous.item_count !== task.item_count || previous.billed_points !== task.billed_points || previous.error_message !== task.error_message; const path = normalizeRoute(location.pathname); if (state.activeNote) { if (modalTask && changed) refreshActiveNoteModal(); return; } if (state.activeDouyinVideo && taskId === state.douyinCommentTaskId) { if (changed) queueRender(); return; } if (state.activeKuaishouVideo && isKuaishouDetailTask(taskId)) { if (changed) queueRender(); return; } if (state.activeWeiboPost && isWeiboDetailTask(taskId)) { if (changed) queueRender(); return; } if (!changed) return; if (path === "/tasks") { queueRender(); return; } if (path.endsWith("/results") && state.selectedPlatformTask[platformFromPath(path)] === taskId) queueRender(); } catch (error) { stopPolling(taskId); if (state.activeNote) { if (modalTask) { state.commentError = error.message; refreshActiveNoteModal(); } return; } if (state.activeDouyinVideo && taskId === state.douyinCommentTaskId) { state.douyinDetailError = error.message; queueRender(); return; } if (state.activeKuaishouVideo && isKuaishouDetailTask(taskId)) { state.kuaishouDetailError = error.message; queueRender(); return; } if (state.activeWeiboPost && isWeiboDetailTask(taskId)) { state.weiboDetailError = error.message; queueRender(); return; } const path = normalizeRoute(location.pathname); if (path === "/tasks" || (path.endsWith("/results") && state.selectedPlatformTask[platformFromPath(path)] === taskId)) { setAlert("error", error.message); queueRender(); } } };
     state.polling.set(taskId, setInterval(tick, Math.max(1, state.config?.poll_interval_seconds || 2) * 1000)); tick();
   }
   function stopPolling(taskId) { if (state.polling.has(taskId)) clearInterval(state.polling.get(taskId)); state.polling.delete(taskId); }
+  function isKuaishouDetailTask(taskId) { return taskId === state.kuaishouCommentTaskId || [...state.kuaishouReplyTaskIds.values()].includes(taskId); }
+  function isWeiboDetailTask(taskId) { return taskId === state.weiboCommentTaskId || [...state.weiboReplyTaskIds.values()].includes(taskId); }
   async function loadActors() {
     if (!state.config?.api_key_configured) { state.actors = []; state.actorsError = "尚未配置 API Key"; return; }
     try { const payload = await requestJson("/api/client/actors"); state.actors = Array.isArray(payload?.data) ? payload.data : []; state.actorsError = ""; }
@@ -715,18 +751,67 @@
     const history = event.target.closest("[data-select-platform-task]"); if (history) { state.resultFilter = ""; state.selectedPlatformTask[history.dataset.platform] = history.dataset.selectPlatformTask; await ensurePlatformSelection(history.dataset.platform, history.dataset.selectPlatformTask); render(); return; }
     const commentLink = event.target.closest("[data-open-comments]"); if (commentLink) { await openComments(commentLink.dataset.taskId, Number(commentLink.dataset.itemIndex)); return; }
     const douyinDetail = event.target.closest("[data-open-douyin-detail]"); if (douyinDetail) { const item = resultItems(state.results.get(douyinDetail.dataset.taskId))[Number(douyinDetail.dataset.itemIndex)]; if (item) { const videoUrl = String(douyinUrl(item)); const savedCommentTask = state.recentTasks.find((task) => task.operation === "douyin_fetch_comments" && task.detailVideoUrl === videoUrl); state.activeDouyinVideo = item; state.douyinDetailError = ""; state.douyinDetailBusy = false; state.douyinCommentTaskId = savedCommentTask?.id || ""; if (savedCommentTask) { try { await refreshTask(savedCommentTask.id); } catch (error) { state.douyinDetailError = error.message; } } render(); } return; }
-    const kuaishouDetail = event.target.closest("[data-open-kuaishou-detail]"); if (kuaishouDetail) { const item = resultItems(state.results.get(kuaishouDetail.dataset.taskId))[Number(kuaishouDetail.dataset.itemIndex)]; if (item) { const videoKey = kuaishouVideoKey(item); const savedCommentTask = state.recentTasks.find((task) => task.operation === "kuaishou_get_video_comments" && task.detailVideoKey === videoKey); state.activeKuaishouVideo = item; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = savedCommentTask?.id || ""; if (savedCommentTask) { try { await refreshTask(savedCommentTask.id); } catch (error) { state.kuaishouDetailError = error.message; } } render(); } return; }
+    const kuaishouDetail = event.target.closest("[data-open-kuaishou-detail]");
+    if (kuaishouDetail) {
+      const item = resultItems(state.results.get(kuaishouDetail.dataset.taskId))[Number(kuaishouDetail.dataset.itemIndex)];
+      if (item) {
+        const videoKey = kuaishouVideoKey(item); const savedCommentTask = state.recentTasks.find((task) => task.operation === "kuaishou_get_video_comments" && task.detailVideoKey === videoKey);
+        state.activeKuaishouVideo = item; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = savedCommentTask?.id || ""; state.kuaishouReplyTaskIds = new Map(); state.kuaishouReplyBusy.clear();
+        const savedReplies = state.recentTasks.filter((task) => task.operation === "kuaishou_get_comment_replies" && task.detailVideoKey === videoKey);
+        for (const task of savedReplies) if (task.detailCommentId && !state.kuaishouReplyTaskIds.has(task.detailCommentId)) state.kuaishouReplyTaskIds.set(task.detailCommentId, task.id);
+        try { await Promise.all([...(savedCommentTask ? [refreshTask(savedCommentTask.id)] : []), ...[...state.kuaishouReplyTaskIds.values()].map((id) => refreshTask(id))]); }
+        catch (error) { state.kuaishouDetailError = error.message; }
+        render();
+      }
+      return;
+    }
+    const kuaishouDetailReplies = event.target.closest("[data-kuaishou-collect-replies]");
+    if (kuaishouDetailReplies) {
+      const photoId = String(kuaishouDetailReplies.dataset.photoId || ""); const commentId = String(kuaishouDetailReplies.dataset.commentId || ""); const limit = Math.min(100, Math.max(1, Number(document.querySelector("#kuaishou-reply-limit")?.value || 20)));
+      if (!photoId || !commentId) { state.kuaishouDetailError = "评论结果缺少作品 ID 或评论 ID，无法采集回复。"; render(); return; }
+      state.kuaishouReplyBusy.add(commentId); state.kuaishouDetailError = ""; render();
+      try {
+        const videoKey = kuaishouVideoKey(state.activeKuaishouVideo || {});
+        const task = await submitTask("kuaishou_get_comment_replies", { video_id: photoId, comment_id: commentId, max_items: limit }, "kuaishou", `评论回复 · ${commentId}`, { selectResult: false, hideFromHistory: true, detailVideoKey: videoKey, detailCommentId: commentId });
+        state.kuaishouReplyTaskIds.set(commentId, String(task.id)); await refreshTask(String(task.id));
+      } catch (error) { state.kuaishouDetailError = error.message; }
+      finally { state.kuaishouReplyBusy.delete(commentId); render(); }
+      return;
+    }
     const commentReplyLink = event.target.closest("[data-open-comment-replies]"); if (commentReplyLink) { await openCommentTask(commentReplyLink.dataset.taskId, Number(commentReplyLink.dataset.itemIndex)); return; }
-    const weiboComments = event.target.closest("[data-weibo-comments]"); if (weiboComments) { state.selectedWeiboOperation = "weibo_get_post_comments"; state.weiboPrefill = { post_id: weiboComments.dataset.postId, post_url: weiboComments.dataset.postUrl }; await navigate("/weibo/search"); return; }
-    const weiboReplies = event.target.closest("[data-weibo-replies]"); if (weiboReplies) { state.selectedWeiboOperation = "weibo_get_post_comment_replies"; state.weiboPrefill = { post_id: weiboReplies.dataset.postId, comment_id: weiboReplies.dataset.commentId }; await navigate("/weibo/search"); return; }
-    const kuaishouComments = event.target.closest("[data-kuaishou-comments]"); if (kuaishouComments) { state.selectedKuaishouOperation = "kuaishou_get_video_comments"; state.kuaishouPrefill = { video_id: kuaishouComments.dataset.videoId, video_url: kuaishouComments.dataset.videoUrl }; await navigate("/kuaishou/search"); return; }
-    const kuaishouReplies = event.target.closest("[data-kuaishou-replies]"); if (kuaishouReplies) { state.selectedKuaishouOperation = "kuaishou_get_comment_replies"; state.kuaishouPrefill = { video_id: kuaishouReplies.dataset.videoId, comment_id: kuaishouReplies.dataset.commentId }; await navigate("/kuaishou/search"); return; }
-    const useVideos = event.target.closest("[data-use-selected-videos]"); if (useVideos) { state.douyinMode = "comments"; state.douyinPrefillUrls = [...state.selectedVideos]; await navigate("/douyin/search"); return; }
+    const weiboDetail = event.target.closest("[data-open-weibo-detail]");
+    if (weiboDetail) {
+      const item = resultItems(state.results.get(weiboDetail.dataset.taskId))[Number(weiboDetail.dataset.itemIndex)];
+      if (item) {
+        const postKey = weiboPostKey(item); const savedCommentTask = state.recentTasks.find((task) => task.operation === "weibo_get_post_comments" && task.detailPostKey === postKey);
+        state.activeWeiboPost = item; state.weiboDetailError = ""; state.weiboDetailBusy = false; state.weiboCommentTaskId = savedCommentTask?.id || ""; state.weiboReplyTaskIds = new Map(); state.weiboReplyBusy.clear();
+        const savedReplies = state.recentTasks.filter((task) => task.operation === "weibo_get_post_comment_replies" && task.detailPostKey === postKey);
+        for (const task of savedReplies) if (task.detailCommentId && !state.weiboReplyTaskIds.has(task.detailCommentId)) state.weiboReplyTaskIds.set(task.detailCommentId, task.id);
+        try { await Promise.all([...(savedCommentTask ? [refreshTask(savedCommentTask.id)] : []), ...[...state.weiboReplyTaskIds.values()].map((id) => refreshTask(id))]); }
+        catch (error) { state.weiboDetailError = error.message; }
+        render();
+      }
+      return;
+    }
+    const weiboDetailReplies = event.target.closest("[data-weibo-collect-replies]");
+    if (weiboDetailReplies) {
+      const postId = String(weiboDetailReplies.dataset.postId || ""); const commentId = String(weiboDetailReplies.dataset.commentId || ""); const limit = Math.min(100, Math.max(1, Number(document.querySelector("#weibo-reply-limit")?.value || 20)));
+      if (!postId || !commentId) { state.weiboDetailError = "评论结果缺少微博 ID 或评论 ID，无法采集回复。"; render(); return; }
+      state.weiboReplyBusy.add(commentId); state.weiboDetailError = ""; render();
+      try {
+        const postKey = weiboPostKey(state.activeWeiboPost || {});
+        const task = await submitTask("weibo_get_post_comment_replies", { post_id: postId, comment_id: commentId, max_items: limit, auto_paginate: true }, "weibo", `评论回复 · ${commentId}`, { selectResult: false, hideFromHistory: true, detailPostKey: postKey, detailCommentId: commentId });
+        state.weiboReplyTaskIds.set(commentId, String(task.id)); await refreshTask(String(task.id));
+      } catch (error) { state.weiboDetailError = error.message; }
+      finally { state.weiboReplyBusy.delete(commentId); render(); }
+      return;
+    }
     const platformResult = event.target.closest("[data-open-platform-result]"); if (platformResult) { state.selectedPlatformTask[platformResult.dataset.platform] = platformResult.dataset.openPlatformResult; await navigate(platformResult.dataset.routeTarget); return; }
     const action = event.target.closest("[data-action]")?.dataset.action;
     if (action === "dismiss-alert") { setAlert("", ""); render(); return; }
     if (action === "close-douyin-detail") { state.activeDouyinVideo = null; state.douyinDetailError = ""; state.douyinDetailBusy = false; state.douyinCommentTaskId = ""; render(); return; }
-    if (action === "close-kuaishou-detail") { state.activeKuaishouVideo = null; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = ""; render(); return; }
+    if (action === "close-kuaishou-detail") { state.activeKuaishouVideo = null; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = ""; state.kuaishouReplyTaskIds = new Map(); state.kuaishouReplyBusy.clear(); render(); return; }
+    if (action === "close-weibo-detail") { state.activeWeiboPost = null; state.weiboDetailError = ""; state.weiboDetailBusy = false; state.weiboCommentTaskId = ""; state.weiboReplyTaskIds = new Map(); state.weiboReplyBusy.clear(); render(); return; }
     if (action === "cancel-modal-action") { event.target.closest("dialog")?.close(); return; }
     if (action === "close-comments") { state.activeNote = null; state.commentTaskId = ""; state.commentTaskIds = []; state.replyTaskIds = new Map(); state.replyBusy.clear(); state.commentError = ""; state.noteDetailTaskId = ""; state.noteDetailError = ""; state.batchReplyPlan = null; state.batchReplyProgress = null; render(); return; }
     if (action === "refresh-note-detail") { showNoteDetailConfirmation(); return; }
@@ -764,7 +849,8 @@
     const detail = event.target.closest("[data-detail-index]"); if (detail) showDetail(detail.dataset.taskId, Number(detail.dataset.detailIndex));
     if (event.target.matches("[data-modal-backdrop]")) { state.activeNote = null; state.commentTaskId = ""; state.commentTaskIds = []; state.replyTaskIds = new Map(); state.replyBusy.clear(); state.commentError = ""; state.noteDetailTaskId = ""; state.noteDetailError = ""; state.batchReplyPlan = null; state.batchReplyProgress = null; render(); }
     if (event.target.matches("[data-douyin-modal-backdrop]")) { state.activeDouyinVideo = null; state.douyinDetailError = ""; state.douyinDetailBusy = false; state.douyinCommentTaskId = ""; render(); }
-    if (event.target.matches("[data-kuaishou-modal-backdrop]")) { state.activeKuaishouVideo = null; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = ""; render(); }
+    if (event.target.matches("[data-kuaishou-modal-backdrop]")) { state.activeKuaishouVideo = null; state.kuaishouDetailError = ""; state.kuaishouDetailBusy = false; state.kuaishouCommentTaskId = ""; state.kuaishouReplyTaskIds = new Map(); state.kuaishouReplyBusy.clear(); render(); }
+    if (event.target.matches("[data-weibo-modal-backdrop]")) { state.activeWeiboPost = null; state.weiboDetailError = ""; state.weiboDetailBusy = false; state.weiboCommentTaskId = ""; state.weiboReplyTaskIds = new Map(); state.weiboReplyBusy.clear(); render(); }
   });
   document.addEventListener("change", (event) => {
     if (event.target.matches('#douyin-detail-comments-form input[name="includeReplies"]')) { const input = document.querySelector('#douyin-detail-comments-form input[name="maxRepliesPerComment"]'); if (input) input.disabled = !event.target.checked; return; }
@@ -796,6 +882,16 @@
         const task = await submitTask("kuaishou_get_video_comments", { ...input, ...(videoUrl ? { video_url: videoUrl } : { video_id: videoId }) }, "kuaishou", `视频评论 · ${kuaishouTitle(item)}`, { selectResult: false, hideFromHistory: true, detailVideoKey: videoKey });
         state.kuaishouCommentTaskId = String(task.id); state.kuaishouDetailBusy = false; state.kuaishouDetailError = ""; render();
       } catch (error) { state.kuaishouDetailError = error.message; state.kuaishouDetailBusy = false; render(); }
+      return;
+    }
+    if (form.id === "weibo-detail-comments-form") {
+      state.weiboDetailBusy = true; state.weiboDetailError = ""; render();
+      try {
+        const item = state.activeWeiboPost || {}; const postKey = weiboPostKey(item); if (!postKey) throw new Error("该微博缺少可用于采集评论的微博 ID 或链接。");
+        const input = formInput(form); const postId = weiboPostId(item); const postUrl = weiboPostUrl(item);
+        const task = await submitTask("weibo_get_post_comments", { ...input, auto_paginate: true, ...(postUrl ? { post_url: postUrl } : { post_id: postId }) }, "weibo", `微博评论 · ${weiboContent(item).slice(0, 30)}`, { selectResult: false, hideFromHistory: true, detailPostKey: postKey });
+        state.weiboCommentTaskId = String(task.id); state.weiboDetailBusy = false; state.weiboDetailError = ""; render();
+      } catch (error) { state.weiboDetailError = error.message; state.weiboDetailBusy = false; render(); }
       return;
     }
     state.busy = true;

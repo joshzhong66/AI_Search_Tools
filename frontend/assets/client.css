@@ -217,6 +217,18 @@ td code { font: 11px ui-monospace, monospace; }
 .douyin-comment-list .identity-cell small { color: #9297a5; }
 .douyin-comment-list p { min-width: 0; margin: 0; color: #e0e3e9; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .douyin-comment-list footer { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px; color: #9297a5; font-size: 10px; }
+.kuaishou-reply-settings { display: flex; align-items: end; justify-content: space-between; gap: 14px; padding: 10px 22px; border-top: 1px solid #31333b; background: #191a20; }
+.kuaishou-reply-settings > div { display: grid; gap: 3px; }
+.kuaishou-reply-settings strong { color: #f2f4f7; font-size: 13px; }
+.kuaishou-reply-settings small { color: #9297a5; font-size: 11px; }
+.kuaishou-reply-settings .field { width: 130px; color: #c9cdd6; }
+.kuaishou-reply-list { grid-column: 1 / -1; margin-top: 2px; border-left-color: #555a66; }
+.kuaishou-reply-list > span { display: block; padding: 10px; color: #9297a5; font-size: 11px; }
+.kuaishou-reply-item { display: grid; grid-template-columns: minmax(120px, .6fr) minmax(0, 1.4fr); gap: 8px 12px; padding: 10px 0; border-bottom: 1px solid #31333b; }
+.kuaishou-reply-item:last-child { border-bottom: 0; }
+.kuaishou-reply-item strong, .kuaishou-reply-item p { color: #e0e3e9; }
+.kuaishou-reply-item p { margin: 0; font-size: 12px; line-height: 1.55; }
+.kuaishou-reply-item footer { grid-column: 1 / -1; display: flex; gap: 10px; color: #9297a5; font-size: 10px; }
 .comment-groups { display: grid; gap: 12px; padding: 14px; background: var(--bg); }
 .comment-group { border: 1px solid var(--line); border-radius: 7px; background: #fff; overflow: hidden; }
 .comment-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--line); background: #fafbfc; }
@@ -420,6 +432,10 @@ td code { font: 11px ui-monospace, monospace; }
   .douyin-collection-form { grid-template-columns: 1fr; padding: 8px 14px 16px; }
   .douyin-collection-form .button { width: 100%; justify-self: stretch; }
   .douyin-detail-comments > header { padding-inline: 14px; }
+  .kuaishou-reply-settings { align-items: stretch; flex-direction: column; padding-inline: 14px; }
+  .kuaishou-reply-settings .field { width: 100%; }
+  .kuaishou-reply-item { grid-template-columns: 1fr; }
+  .kuaishou-reply-item footer { grid-column: auto; }
   .douyin-comment-list article { grid-template-columns: 1fr; padding-inline: 14px; }
   .douyin-comment-list footer { grid-column: auto; }
   .xhs-author-row { padding: 14px 52px 12px 14px; }

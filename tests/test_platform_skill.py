@@ -133,7 +133,10 @@ class PlatformSkillTests(unittest.TestCase):
 
     def test_official_input_mapping_is_shared_by_business_operations(self) -> None:
         self.assertEqual(skill._apify_input("weibo_search_posts", {"keyword": "AI"})["operation"], "search_posts")
-        self.assertEqual(skill._apify_input("kuaishou_get_video_comments", {"video_id": "1"})["operation"], "get_video_comments")
+        kuaishou_comments = skill._apify_input("kuaishou_get_video_comments", {"video_url": "https://www.kuaishou.com/short-video/1", "max_items": 20})
+        self.assertEqual(kuaishou_comments, {"operation": "get_video_comments", "url": "https://www.kuaishou.com/short-video/1", "max_items": 20})
+        kuaishou_replies = skill._apify_input("kuaishou_get_comment_replies", {"video_id": "photo-1", "comment_id": "comment-1", "max_items": 10})
+        self.assertEqual(kuaishou_replies, {"operation": "get_video_sub_comments", "photo_id": "photo-1", "comment_id": "comment-1", "max_items": 10})
         self.assertEqual(skill._apify_input("get_note_comments", {"note_id": "n"})["operation"], "get_note_comments")
         douyin = skill._apify_input("douyin_search_videos", {"keywords": ["AI"]})
         self.assertFalse(douyin["shouldDownloadVideos"])
@@ -153,6 +156,16 @@ class PlatformSkillTests(unittest.TestCase):
         cached = skill.RESULT_CACHE_DIR / "RunOfficial123.json"
         self.assertTrue(cached.exists())
         self.assertEqual(json.loads(cached.read_text(encoding="utf-8"))["result"]["items"][0]["title"], "结果")
+
+    def test_failed_apify_task_reads_output_error(self) -> None:
+        responses = [
+            {"data": {"id": "FailedRun123", "status": "FAILED", "defaultKeyValueStoreId": "store123"}},
+            {"error": {"message": "Provide photo_id or url."}},
+        ]
+        with mock.patch.object(skill, "call_apify", side_effect=responses):
+            task = skill.get_task("FailedRun123")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["error_message"], "缺少快手作品 ID 或作品链接（photo_id/url），请重新提交评论采集任务。")
 
     def test_submit_task_uses_official_actor_only(self) -> None:
         expected = {"id": "official-task", "provider": "apify"}

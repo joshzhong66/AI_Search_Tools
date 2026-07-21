@@ -1,5 +1,7 @@
 # 能力参数
 
+网页统一交互规则：评论和回复 operation 只作为内容详情内部任务使用，不出现在平台结果历史和“全部任务”。以下 operation 仍保留给详情弹窗和 CLI 调用。
+
 调用前运行 `list-actors` 获取可用 Actor 和 operation。官方模式使用客户端内置 Actor 目录并验证 Apify Token；网关模式通过 `GET /v1/actors` 读取网关授权目录。
 
 ## 小红书
@@ -90,5 +92,9 @@ operation：`douyin_fetch_comments`
 | `kuaishou_get_comment_replies` | 获取二级评论回复 | `video_id`、`comment_id`、可选 `max_items` |
 | `kuaishou_get_user_info` | 获取博主资料 | `user_id` 或 `profile_url` |
 | `kuaishou_list_user_videos` | 获取博主作品 | `user_id` 或 `profile_url`、可选 `max_items` |
+
+客户端继续使用统一字段 `video_id`、`video_url` 和 operation `kuaishou_get_comment_replies`。提交 Apify 官方 Actor 前会分别转换为 `photo_id`、`url` 和 `get_video_sub_comments`。
+
+一级评论与二级回复是两个独立付费任务：先运行 `kuaishou_get_video_comments`，再对返回结果中 `has_replies=true` 的评论使用真实 `photo_id + comment_id` 提交回复任务。采集一级评论不会自动采集回复。
 
 建议先运行“10 个视频、每个视频 20 条评论、少量回复”的小批量任务，确认字段完整性和实际费用后再扩大范围。

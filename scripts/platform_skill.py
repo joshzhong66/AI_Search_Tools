@@ -69,6 +69,14 @@ APIFY_ACTORS = (
 )
 APIFY_OPERATIONS = {operation: actor for actor in APIFY_ACTORS for operation in actor["operations"]}
 _APIFY_TASK_CONTEXT: dict[str, dict[str, str]] = {}
+KUAISHOU_APIFY_OPERATIONS = {
+    "kuaishou_search_videos": "search_videos",
+    "kuaishou_get_video_detail": "get_video_detail",
+    "kuaishou_get_video_comments": "get_video_comments",
+    "kuaishou_get_comment_replies": "get_video_sub_comments",
+    "kuaishou_get_user_info": "get_user_info",
+    "kuaishou_list_user_videos": "list_user_videos",
+}
 
 
 class PlatformError(RuntimeError):
@@ -259,8 +267,16 @@ def _apify_input(operation: str, task_input: dict[str, Any]) -> dict[str, Any]:
         if output["includeReplies"]:
             output["maxRepliesPerComment"] = payload.get("maxRepliesPerComment", 20)
         return output
-    prefix = "weibo_" if operation in WEIBO_OPERATIONS else "kuaishou_"
-    return {"operation": operation.removeprefix(prefix), **payload}
+    if operation in WEIBO_OPERATIONS:
+        return {"operation": operation.removeprefix("weibo_"), **payload}
+    upstream_operation = KUAISHOU_APIFY_OPERATIONS[operation]
+    if "video_id" in payload:
+        payload["photo_id"] = payload.pop("video_id")
+    if "video_url" in payload:
+        payload["url"] = payload.pop("video_url")
+    if upstream_operation == "get_video_sub_comments":
+        payload.pop("url", None)
+    return {"operation": upstream_operation, **payload}
 
 
 def _apify_status(value: Any) -> str:
@@ -272,6 +288,15 @@ def _apify_status(value: Any) -> str:
     if status in {"FAILED", "ABORTED", "TIMED-OUT"}:
         return "failed"
     return "running"
+
+
+def normalize_apify_error_message(value: str) -> str:
+    message = value.strip()
+    if "Provide photo_id or url" in message:
+        return "缺少快手作品 ID 或作品链接（photo_id/url），请重新提交评论采集任务。"
+    if "Provide photo_id and comment_id" in message:
+        return "缺少快手作品 ID 或一级评论 ID，无法采集评论回复。"
+    return message
 
 
 def _apify_task(payload: Any, context: dict[str, str] | None = None) -> dict[str, Any]:
@@ -292,6 +317,7 @@ def _apify_task(payload: Any, context: dict[str, str] | None = None) -> dict[str
         "actor_id": str(data.get("actId") or saved.get("actor_id") or ""),
         "operation": saved.get("operation") or "",
         "dataset_id": str(data.get("defaultDatasetId") or ""),
+        "key_value_store_id": str(data.get("defaultKeyValueStoreId") or ""),
         "cost_usd": usage,
         "started_at": data.get("startedAt"),
         "finished_at": data.get("finishedAt"),
@@ -358,7 +384,18 @@ def infer_provider(task_id: str, provider: str | None = None) -> str:
 
 
 def get_task(task_id: str, provider: str | None = None) -> dict[str, Any]:
-    return _apify_task(call_apify("GET", f"/actor-runs/{_task_id(task_id)}"))
+    task = _apify_task(call_apify("GET", f"/actor-runs/{_task_id(task_id)}"))
+    store_id = task.get("key_value_store_id")
+    if task["status"] == "failed" and not task.get("error_message") and store_id:
+        try:
+            output = call_apify("GET", f"/key-value-stores/{_task_id(str(store_id))}/records/OUTPUT")
+            error_data = output.get("error") if isinstance(output, dict) else None
+            message = error_data.get("message") if isinstance(error_data, dict) else None
+            if message:
+                task["error_message"] = normalize_apify_error_message(str(message))
+        except PlatformError:
+            pass
+    return task
 
 
 def get_results(task_id: str, provider: str | None = None) -> dict[str, Any]:
