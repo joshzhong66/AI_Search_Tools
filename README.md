@@ -28,7 +28,7 @@ AI / CLI ─┐                                      ┌─ Apify 官方 API ─
 - 连接：本机保存 Apify Token；可选保存网关地址和 API Key，浏览器只访问本地代理。
 - CLI：与网页共用配置、operation 和双适配器调用逻辑。
 
-## 使用参考
+## Skills使用参考
 
 ### 安装skills
 
@@ -52,7 +52,9 @@ http://127.0.0.1:8790/
 
 【排序方式】：热门/综合/最新
 
-![搜索与采集界面](image/web-search.png)
+按需填写
+
+![搜索参数填写示例](image/search-form.png)
 
 ### 采集结果
 
@@ -62,7 +64,11 @@ http://127.0.0.1:8790/
 
 
 
-## 快速开始
+### 评论及回复采集
+
+![评论及回复采集](image/comment-replies.png)
+
+## 手动快速开始
 
 要求 Python 3.10 或更高版本，不需要安装第三方 Python 包。
 
