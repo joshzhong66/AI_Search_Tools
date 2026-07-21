@@ -9,23 +9,27 @@ description: >-
 
 通过 `scripts/platform_skill.py` 使用 Apify 官方 API 创建 Actor Run、轮询状态并读取默认 Dataset。
 
-## 安装后引导
+## 安装与网页入口
 
-安装完成后先运行：
-
-```powershell
-python scripts/platform_skill.py show-config
-```
-
-- 未配置 Apify Token：说明用户需要在“API配置”页或 `APIFY_API_TOKEN` 环境变量中配置 Token；配置后运行 `list-actors` 验证。
-- 已配置 Token：询问用户“是否启动本地网页？”。不要未经确认启动。
-- 用户确认启动：以后台方式运行下列命令，等待输出实际地址，并告知用户打开该 URL：
+- Skill 安装目录为包含本文件的目录；所有脚本都从该目录执行，不假定用户的当前工作目录。
+- **安装后的首次交互必须先询问网页启动，不能直接执行搜索、采集或其他业务操作。** 先向用户发送：`Sofunny AI Search 已安装。是否现在启动本地网页？`
+- 未得到明确同意时，不得启动服务；用户拒绝时，继续处理其 CLI 请求，或告知其可随时要求启动网页。
+- 用户明确同意时，以后台方式运行下列命令，等待其输出实际地址，然后只报告该 URL 和端口：
 
 ```powershell
 python scripts/platform_skill.py serve --port 0 --open-browser
 ```
 
-`--port 0` 自动选择可用端口。用户拒绝启动时，提示可在需要时运行同一条命令。
+`--port 0` 自动选择可用端口。不得猜测或预先声明端口；必须以命令输出为准。浏览器打开失败不影响服务时，仍报告 URL。
+
+用户确认或拒绝网页启动后，运行：
+
+```powershell
+python scripts/platform_skill.py show-config
+```
+
+- 未配置 Apify Token：提示用户在网页“API配置”页或 `APIFY_API_TOKEN` 环境变量中配置 Token；配置后运行 `list-actors` 验证。
+- 已配置 Token：继续执行用户请求。
 
 ## 任务流程
 
