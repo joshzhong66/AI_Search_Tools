@@ -1,12 +1,17 @@
-# AI_Search_Tools
+# sofunny-ai-search
 
 ## 项目介绍
 
-AI_Search_Tools 是本地 AI Skill 客户端，提供无登录网页和统一 CLI，用于执行小红书、抖音、快手与微博内容搜索和采集任务。
+`sofunny-ai-search` 是本地 AI Skill 客户端，提供无登录网页和统一 CLI，用于执行小红书、抖音、快手与微博内容搜索和采集任务。
 
-项目仅直连 Apify 官方 API。客户端不提供账号、钱包、API 令牌管理、计费聚合或本地数据中心。
+- 项目直连 Apify 官方 API。
+- 客户端不提供账号、钱包、API 令牌管理、计费聚合或本地数据中心。
 
-## 项目架构
+![image-20260722103424210](image/image-20260722103424210.png)
+
+
+
+## 项目当前架构
 
 ```text
 AI / CLI ─┐                                      ┌─ Apify 官方 API ─ Actor Run / Dataset
@@ -16,11 +21,13 @@ AI / CLI ─┐                                      ┌─ Apify 官方 API ─
 
 浏览器 `localStorage` 保存最近 50 个任务的索引及结果 JSON 缓存；重新打开时会先读取本地缓存，再通过 Apify 官方 API 同步任务状态和结果。
 
-已完成任务的完整结果还会写入项目内的 `outputs/task-results/<任务ID>.json`。当前项目对应的绝对目录是 `C:\Users\zhongjinlin\Desktop\ai_search_tools\outputs\task-results\`。该目录不进入 Git，适合本地归档和重启服务后的结果留存。
+已完成任务的完整结果还会写入项目根目录下的 `outputs/task-results/<任务ID>.json`。该目录不进入 Git，适合本地归档和重启服务后的结果留存。
+
+结果目录由程序根据项目根目录动态计算，不包含具体用户名、桌面路径或操作系统分隔符；换用其他 Windows 用户、电脑或 macOS/Linux 时，仍使用同一相对目录结构。
 
 ## 接口与 Actor 调用链
 
-当前版本不直接调用小红书、抖音、快手或微博官方接口，也没有启用 AI-Search-Platform 网关。网页和 Skills CLI 都先进入本地代理，再由本地代理使用 Apify Token 调用 Apify 官方 API。
+当前版本不直接调用小红书、抖音、快手或微博官方接口，也没有启用 Sofunny 网关。网页和 Skills CLI 都先进入本地代理，再由本地代理使用 Apify Token 调用 Apify 官方 API。
 
 ```text
 本地网页 / Skills CLI
@@ -87,7 +94,7 @@ AI / CLI ─┐                                      ┌─ Apify 官方 API ─
 将skills插件链接给到你的AI Agents，让其进行安装，如下地址：
 
 ```
-https://it-gitlab.xmfunny.com/zhongjinlin/ai_search_tools
+https://it-gitlab.xmfunny.com/zhongjinlin/sofunny-ai-search
 ```
 
 安装完成后，AI会提示启动服务和web前端页面，启动后复制链接在浏览器打开：
@@ -194,25 +201,25 @@ python scripts/platform_skill.py results <task_id>
 
 Actor ID 必须从 `list-actors` 获取。Apify 官方 POST 不自动重试；提交超时后应先在 Apify Console 确认是否已创建 Run，再决定是否重新提交。
 
-### JSON 结果保存位置
+## JSON 结果保存位置
 
 Skills 在本机读取已完成任务的结果后，会将完整 JSON 保存到：
 
 ```text
-C:\Users\zhongjinlin\Desktop\ai_search_tools\outputs\task-results\<任务ID>.json
+outputs/task-results/<任务ID>.json
 ```
 
-例如任务 ID 为 `RunOfficial123` 时，文件绝对路径为：
+例如任务 ID 为 `RunOfficial123` 时，对应的相对路径为：
 
 ```text
-C:\Users\zhongjinlin\Desktop\ai_search_tools\outputs\task-results\RunOfficial123.json
+outputs/task-results/RunOfficial123.json
 ```
 
 - 执行 `python scripts/platform_skill.py results <task_id>` 会读取上游 Dataset 并生成或更新该 JSON 文件。
 - 网页打开已完成任务的采集结果时，也会通过本地接口读取结果并写入同一目录。
 - `run`、`run --wait` 和 `status` 只提交或查询任务状态，不会单独生成完整结果 JSON；任务完成后仍需执行 `results` 或在网页中打开结果。
 - JSON 顶层包含 `task_id`、`saved_at` 和 `result`；实际任务信息及采集数据位于 `result.task` 和 `result.items`。
-- 保存目录以项目根目录为基准。如果将项目移动到其他位置，绝对路径会相应变化，但相对目录始终是 `outputs/task-results/`。
+- 保存目录以项目根目录为基准。如果将项目移动到其他位置，实际绝对路径会随项目位置变化，但相对目录始终是 `outputs/task-results/`。
 
 真实官方 Token 必须由用户在本机设置页输入，本仓库和测试不包含任何凭据，也不会自动运行付费任务。
 

@@ -296,7 +296,7 @@ class ClientProxyTests(unittest.TestCase):
                 with self.subTest(route=route):
                     with request.urlopen(f"http://127.0.0.1:{server.server_port}{route}") as response:
                         content = response.read().decode("utf-8")
-                    self.assertIn("AI 搜索 Skill", content)
+                    self.assertIn("sofunny-ai-search", content)
         finally:
             server.shutdown()
             server.server_close()

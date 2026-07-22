@@ -598,7 +598,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         raise SystemExit("为保护 API Key，本地代理只允许绑定 127.0.0.1、localhost 或 ::1")
     server = ThreadingHTTPServer((args.host, args.port), ClientHandler)
     url = f"http://{args.host}:{server.server_address[1]}"
-    print(f"AI Search Skill 前端已启动：{url}")
+    print(f"sofunny-ai-search 前端已启动：{url}")
     if args.open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
@@ -610,7 +610,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Apify 官方优先、AI-Search-Platform 网关备份的 AI 搜索 Skill")
+    parser = argparse.ArgumentParser(description="sofunny-ai-search：Apify 官方优先、Sofunny 网关备份的 AI 搜索 Skill")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("show-config", help="显示官方与网关备份状态（凭据仅显示掩码）")
     sub.add_parser("list-actors", help="列出当前凭据可用的 Actor")

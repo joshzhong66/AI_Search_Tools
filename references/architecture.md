@@ -2,7 +2,7 @@
 
 ## 项目边界
 
-AI_Search_Tools 是无登录 AI Skill 客户端。小红书、抖音、快手与微博共用业务 operation 和页面，统一通过 Apify 官方 API 执行任务。
+`sofunny-ai-search` 是无登录 AI Skill 客户端。小红书、抖音、快手与微博共用业务 operation 和页面，统一通过 Apify 官方 API 执行任务。
 
 ```text
 本地 AI CLI / 无登录网页

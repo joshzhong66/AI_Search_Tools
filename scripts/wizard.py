@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI 搜索 Skill 交互式启动向导。"""
+"""sofunny-ai-search 交互式启动向导。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def ask(prompt: str, default: str = "") -> str:
 
 
 def main() -> None:
-    print("AI 搜索 Skill 上游连接向导")
+    print("sofunny-ai-search 上游连接向导")
     print("仅使用 Apify 官方 API。\n")
     config = load_config()
     print(f"Apify 官方：{config['apify_api_base']}")
